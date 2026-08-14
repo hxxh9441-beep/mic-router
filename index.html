@@ -133,13 +133,15 @@
       .num-input {
         width: 4.6rem;
         text-align: center;
+        direction: ltr; /* الرقم + % بترتيب سليم ومتوازن */
         background: rgba(255, 255, 255, 0.06);
         border: 1px solid rgba(148, 163, 184, 0.22);
         border-radius: 0.6rem;
-        padding: 0.32rem 1.1rem 0.32rem 0.45rem;
+        padding: 0.32rem 0.25rem; /* حشوة متناظرة — تمركز تام */
         color: #e2e8f0;
         font-size: 0.82rem;
         font-weight: 700;
+        line-height: 1.2;
         outline: none;
         appearance: textfield;
         -moz-appearance: textfield;
@@ -152,15 +154,6 @@
       .num-input:focus {
         border-color: rgba(34, 211, 238, 0.55);
         box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
-      }
-      .num-suffix {
-        position: absolute;
-        inset-inline-end: 0.42rem;
-        top: 50%;
-        transform: translateY(-50%);
-        font-size: 0.68rem;
-        color: #94a3b8;
-        pointer-events: none;
       }
 
       /* ── أزرار الزيادة والنقصان (±5%) ──────── */
@@ -379,10 +372,7 @@
                   <label for="delayRange" class="text-sm text-slate-300">زمن الصدى</label>
                   <div class="flex items-center gap-1.5">
                     <button type="button" class="step-btn" data-target="delayRange" data-delta="-5" aria-label="نقصان 5%">−</button>
-                    <span class="relative">
-                      <input type="number" id="delayNum" class="num-input" min="0" max="100" value="0" inputmode="numeric" />
-                      <span class="num-suffix">%</span>
-                    </span>
+                    <input type="text" id="delayNum" class="num-input" inputmode="numeric" value="0%" dir="ltr" />
                     <button type="button" class="step-btn" data-target="delayRange" data-delta="5" aria-label="زيادة 5%">+</button>
                   </div>
                 </div>
@@ -404,10 +394,7 @@
                   <label for="feedbackRange" class="text-sm text-slate-300">قوة الصدى</label>
                   <div class="flex items-center gap-1.5">
                     <button type="button" class="step-btn" data-target="feedbackRange" data-delta="-5" aria-label="نقصان 5%">−</button>
-                    <span class="relative">
-                      <input type="number" id="feedbackNum" class="num-input" min="0" max="90" value="0" inputmode="numeric" />
-                      <span class="num-suffix">%</span>
-                    </span>
+                    <input type="text" id="feedbackNum" class="num-input" inputmode="numeric" value="0%" dir="ltr" />
                     <button type="button" class="step-btn" data-target="feedbackRange" data-delta="5" aria-label="زيادة 5%">+</button>
                   </div>
                 </div>
@@ -440,10 +427,7 @@
                 <label for="hpfRange" class="text-sm text-slate-300">قوة التنقية</label>
                 <div class="flex items-center gap-1.5">
                   <button type="button" class="step-btn" data-target="hpfRange" data-delta="-5" aria-label="نقصان 5%">−</button>
-                  <span class="relative">
-                    <input type="number" id="hpfNum" class="num-input" min="0" max="100" value="0" inputmode="numeric" />
-                    <span class="num-suffix">%</span>
-                  </span>
+                  <input type="text" id="hpfNum" class="num-input" inputmode="numeric" value="0%" dir="ltr" />
                   <button type="button" class="step-btn" data-target="hpfRange" data-delta="5" aria-label="زيادة 5%">+</button>
                 </div>
               </div>
@@ -476,10 +460,7 @@
                 <label for="gainRange" class="text-sm text-slate-300">مستوى الصوت</label>
                 <div class="flex items-center gap-1.5">
                   <button type="button" class="step-btn" data-target="gainRange" data-delta="-5" aria-label="نقصان 5%">−</button>
-                  <span class="relative">
-                    <input type="number" id="gainNum" class="num-input" min="0" max="200" value="100" inputmode="numeric" />
-                    <span class="num-suffix">%</span>
-                  </span>
+                  <input type="text" id="gainNum" class="num-input" inputmode="numeric" value="100%" dir="ltr" />
                   <button type="button" class="step-btn" data-target="gainRange" data-delta="5" aria-label="زيادة 5%">+</button>
                 </div>
               </div>
@@ -911,7 +892,7 @@
         const r = $(range)
         const n = $(num)
         const apply = (raw) => {
-          const s = String(raw).trim()
+          const s = String(raw).replace(/[%٪\s]/g, '').trim() // شيل % والمسافات
           if (s === '') return // حقل فارغ: لا تغيير
           let v = toNum(s)
           if (!Number.isFinite(v)) return // إدخال غير صالح: لا تغيير
@@ -919,11 +900,11 @@
           const max = Number(r.max)
           const clamped = Math.min(max, Math.max(min, Math.round(v)))
           r.value = clamped
-          n.value = clamped
+          n.value = clamped + '%'
           set(clamped)
         }
         r.addEventListener('input', () => {
-          n.value = r.value
+          n.value = r.value + '%'
           set(Number(r.value))
         })
         n.addEventListener('change', () => apply(n.value))
