@@ -3,12 +3,34 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <title>موجّه الصوت — اربط ميكروفونك بسماعتك مباشرة</title>
+    <title>مكبّر الصوت — حوّل جوالك إلى مايكروفون مع فلاتر وتسجيل</title>
     <meta name="theme-color" content="#0f172a" />
     <meta
       name="description"
-      content="موجّه الصوت — وصّل ميكروفونك بسماعتك مباشرة واسمع نفسك حي، مع صدى وتنقية الضوضاء، وصوتك ما يغادر جهازك أبداً."
+      content="مكبّر الصوت — حوّل جوالك إلى مايكروفون مع فلاتر وتسجيل."
     />
+
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" type="image/png" href="icons/favicon-64.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="مكبّر الصوت" />
+
+    <!-- Social share preview -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="مكبّر الصوت — حوّل جوالك إلى مايكروفون مع فلاتر وتسجيل" />
+    <meta property="og:description" content="حوّل جوالك إلى مايكروفون مع فلاتر وتسجيل." />
+    <meta property="og:image" content="https://hxxh9441-beep.github.io/mic-router/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="مكبّر الصوت" />
+    <meta name="twitter:description" content="حوّل جوالك إلى مايكروفون مع فلاتر وتسجيل." />
+    <meta name="twitter:image" content="https://hxxh9441-beep.github.io/mic-router/og-image.png" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -107,6 +129,88 @@
         cursor: pointer;
       }
 
+      /* ── حقل النسبة المئوية القابل للكتابة ─── */
+      .num-input {
+        width: 4.6rem;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 0.6rem;
+        padding: 0.32rem 1.1rem 0.32rem 0.45rem;
+        color: #e2e8f0;
+        font-size: 0.82rem;
+        font-weight: 700;
+        outline: none;
+        appearance: textfield;
+        -moz-appearance: textfield;
+      }
+      .num-input::-webkit-outer-spin-button,
+      .num-input::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      .num-input:focus {
+        border-color: rgba(34, 211, 238, 0.55);
+        box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.15);
+      }
+      .num-suffix {
+        position: absolute;
+        inset-inline-end: 0.42rem;
+        top: 50%;
+        transform: translateY(-50%);
+        font-size: 0.68rem;
+        color: #94a3b8;
+        pointer-events: none;
+      }
+
+      /* ── أزرار الزيادة والنقصان (±5%) ──────── */
+      .step-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.8rem;
+        height: 1.8rem;
+        border-radius: 9999px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        color: #cbd5e1;
+        font-size: 1rem;
+        font-weight: 800;
+        line-height: 1;
+        transition: all 0.15s ease;
+        cursor: pointer;
+        user-select: none;
+      }
+      .step-btn:hover {
+        background: rgba(255, 255, 255, 0.12);
+        color: #ffffff;
+        border-color: rgba(148, 163, 184, 0.4);
+      }
+      .step-btn:active {
+        transform: scale(0.9);
+      }
+
+      /* ── أزرار القيم السريعة [25|50|75|100] ── */
+      .preset-btn {
+        padding: 0.32rem 0;
+        border-radius: 0.55rem;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        color: #94a3b8;
+        font-size: 0.72rem;
+        font-weight: 700;
+        transition: all 0.15s ease;
+        cursor: pointer;
+      }
+      .preset-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        color: #e2e8f0;
+        border-color: rgba(148, 163, 184, 0.35);
+      }
+      .preset-btn:active {
+        transform: scale(0.94);
+      }
+
       /* ── حركات ───────────────────────────── */
       @keyframes pulse-ring {
         0% {
@@ -163,27 +267,17 @@
       </div>
 
       <div class="relative z-10 flex max-w-2xl flex-col items-center">
-        <!-- شارة -->
-        <span
-          class="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-sm text-slate-300 backdrop-blur"
-        >
-          <span class="inline-block h-2 w-2 rounded-full bg-emerald-400"></span>
-          صوتك ما يغادر جهازك — خصوصية تامة
-        </span>
-
         <!-- العنوان -->
         <h1
           class="text-5xl font-bold tracking-tight sm:text-6xl md:text-7xl"
           style="background: linear-gradient(135deg, #67e8f9, #60a5fa 45%, #a78bfa); -webkit-background-clip: text; background-clip: text; color: transparent;"
         >
-          موجّه الصوت
+          مكبّر الصوت
         </h1>
 
         <!-- الوصف -->
         <p class="mt-6 max-w-xl text-lg leading-relaxed text-slate-400 sm:text-xl">
-          وصّل ميكروفونك بسماعتك مباشرة — تكلم واسمع نفسك حي وبوضوح، مع
-          <span class="text-slate-200">صدى</span> و<span class="text-slate-200">تنقية للضوضاء</span>،
-          وكل شي يصير على جهازك.
+          حوّل جوالك إلى مايكروفون مع فلاتر وتسجيل.
         </p>
 
         <!-- زر البدء -->
@@ -281,11 +375,24 @@
 
             <div class="space-y-5">
               <div>
-                <div class="mb-2 flex items-center justify-between">
+                <div class="mb-2 flex items-center justify-between gap-2">
                   <label for="delayRange" class="text-sm text-slate-300">زمن الصدى</label>
-                  <span id="delayVal" class="rounded-lg bg-white/5 px-2 py-0.5 text-xs font-semibold text-cyan-300">0%</span>
+                  <div class="flex items-center gap-1.5">
+                    <button type="button" class="step-btn" data-target="delayRange" data-delta="-5" aria-label="نقصان 5%">−</button>
+                    <span class="relative">
+                      <input type="number" id="delayNum" class="num-input" min="0" max="100" value="0" inputmode="numeric" />
+                      <span class="num-suffix">%</span>
+                    </span>
+                    <button type="button" class="step-btn" data-target="delayRange" data-delta="5" aria-label="زيادة 5%">+</button>
+                  </div>
                 </div>
                 <input type="range" id="delayRange" min="0" max="100" value="0" />
+                <div class="mt-2 grid grid-cols-4 gap-1.5">
+                  <button type="button" class="preset-btn" data-target="delayRange" data-value="25">25%</button>
+                  <button type="button" class="preset-btn" data-target="delayRange" data-value="50">50%</button>
+                  <button type="button" class="preset-btn" data-target="delayRange" data-value="75">75%</button>
+                  <button type="button" class="preset-btn" data-target="delayRange" data-value="100">100%</button>
+                </div>
                 <div class="mt-1 flex justify-between text-[11px] text-slate-500">
                   <span>قصير</span>
                   <span>طويل</span>
@@ -293,11 +400,24 @@
               </div>
 
               <div>
-                <div class="mb-2 flex items-center justify-between">
+                <div class="mb-2 flex items-center justify-between gap-2">
                   <label for="feedbackRange" class="text-sm text-slate-300">قوة الصدى</label>
-                  <span id="feedbackVal" class="rounded-lg bg-white/5 px-2 py-0.5 text-xs font-semibold text-cyan-300">0%</span>
+                  <div class="flex items-center gap-1.5">
+                    <button type="button" class="step-btn" data-target="feedbackRange" data-delta="-5" aria-label="نقصان 5%">−</button>
+                    <span class="relative">
+                      <input type="number" id="feedbackNum" class="num-input" min="0" max="90" value="0" inputmode="numeric" />
+                      <span class="num-suffix">%</span>
+                    </span>
+                    <button type="button" class="step-btn" data-target="feedbackRange" data-delta="5" aria-label="زيادة 5%">+</button>
+                  </div>
                 </div>
                 <input type="range" id="feedbackRange" min="0" max="90" value="0" />
+                <div class="mt-2 grid grid-cols-4 gap-1.5">
+                  <button type="button" class="preset-btn" data-target="feedbackRange" data-value="25">25%</button>
+                  <button type="button" class="preset-btn" data-target="feedbackRange" data-value="50">50%</button>
+                  <button type="button" class="preset-btn" data-target="feedbackRange" data-value="75">75%</button>
+                  <button type="button" class="preset-btn" data-target="feedbackRange" data-value="100">100%</button>
+                </div>
                 <div class="mt-1 flex justify-between text-[11px] text-slate-500">
                   <span>خفيف</span>
                   <span>قوي</span>
@@ -316,11 +436,24 @@
               <span class="text-xs text-slate-500">أطفىء الهدير والطنين</span>
             </div>
             <div>
-              <div class="mb-2 flex items-center justify-between">
+              <div class="mb-2 flex items-center justify-between gap-2">
                 <label for="hpfRange" class="text-sm text-slate-300">قوة التنقية</label>
-                <span id="hpfVal" class="rounded-lg bg-white/5 px-2 py-0.5 text-xs font-semibold text-violet-300">0%</span>
+                <div class="flex items-center gap-1.5">
+                  <button type="button" class="step-btn" data-target="hpfRange" data-delta="-5" aria-label="نقصان 5%">−</button>
+                  <span class="relative">
+                    <input type="number" id="hpfNum" class="num-input" min="0" max="100" value="0" inputmode="numeric" />
+                    <span class="num-suffix">%</span>
+                  </span>
+                  <button type="button" class="step-btn" data-target="hpfRange" data-delta="5" aria-label="زيادة 5%">+</button>
+                </div>
               </div>
               <input type="range" id="hpfRange" min="0" max="100" value="0" />
+              <div class="mt-2 grid grid-cols-4 gap-1.5">
+                <button type="button" class="preset-btn" data-target="hpfRange" data-value="25">25%</button>
+                <button type="button" class="preset-btn" data-target="hpfRange" data-value="50">50%</button>
+                <button type="button" class="preset-btn" data-target="hpfRange" data-value="75">75%</button>
+                <button type="button" class="preset-btn" data-target="hpfRange" data-value="100">100%</button>
+              </div>
               <div class="mt-1 flex justify-between text-[11px] text-slate-500">
                 <span>مطفية</span>
                 <span>قوية</span>
@@ -339,11 +472,24 @@
               <span class="text-xs text-slate-500">تحكم بمستوى صوتك العام</span>
             </div>
             <div>
-              <div class="mb-2 flex items-center justify-between">
+              <div class="mb-2 flex items-center justify-between gap-2">
                 <label for="gainRange" class="text-sm text-slate-300">مستوى الصوت</label>
-                <span id="gainVal" class="rounded-lg bg-white/5 px-2 py-0.5 text-xs font-semibold text-emerald-300">100%</span>
+                <div class="flex items-center gap-1.5">
+                  <button type="button" class="step-btn" data-target="gainRange" data-delta="-5" aria-label="نقصان 5%">−</button>
+                  <span class="relative">
+                    <input type="number" id="gainNum" class="num-input" min="0" max="200" value="100" inputmode="numeric" />
+                    <span class="num-suffix">%</span>
+                  </span>
+                  <button type="button" class="step-btn" data-target="gainRange" data-delta="5" aria-label="زيادة 5%">+</button>
+                </div>
               </div>
               <input type="range" id="gainRange" min="0" max="200" value="100" />
+              <div class="mt-2 grid grid-cols-4 gap-1.5">
+                <button type="button" class="preset-btn" data-target="gainRange" data-value="25">25%</button>
+                <button type="button" class="preset-btn" data-target="gainRange" data-value="50">50%</button>
+                <button type="button" class="preset-btn" data-target="gainRange" data-value="75">75%</button>
+                <button type="button" class="preset-btn" data-target="gainRange" data-value="100">100%</button>
+              </div>
               <div class="mt-1 flex justify-between text-[11px] text-slate-500">
                 <span>منخفض</span>
                 <span>عالٍ</span>
@@ -381,8 +527,42 @@
 
     <!-- ══════════ تذييل ══════════ -->
     <footer class="border-t border-white/5 py-8 text-center text-sm text-slate-500">
-      موجّه الصوت — يعمل بالكامل على جهازك · تسجيلاتك تبقى معك
+      مكبّر الصوت — فلاتر حية وتوجيه مباشر وتسجيل
     </footer>
+
+    <!-- ══════════ شريط تثبيت PWA ══════════ -->
+    <div id="installBar" class="fixed inset-x-0 bottom-0 z-50 hidden border-t border-white/10 bg-slate-900/95 px-4 py-3 shadow-2xl shadow-black/50 backdrop-blur">
+      <div class="mx-auto flex max-w-2xl items-center gap-3">
+        <img src="icons/icon-192.png" alt="أيقونة مكبّر الصوت" class="h-11 w-11 shrink-0 rounded-xl" />
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-sm font-bold text-slate-100">ثبّت «مكبّر الصوت»</p>
+          <p id="installHint" class="truncate text-xs text-slate-400">شغّله من شاشتك الرئيسية بضغطة واحدة</p>
+        </div>
+        <button
+          id="installBtn"
+          class="shrink-0 rounded-xl bg-gradient-to-l from-cyan-500 to-blue-600 px-4 py-2 text-sm font-bold text-white shadow-lg shadow-cyan-500/25 transition hover:brightness-110 active:scale-95"
+        >
+          تثبيت
+        </button>
+        <button id="installClose" aria-label="إغلاق" class="shrink-0 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/10 hover:text-slate-200">
+          <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.4">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- تلميح iOS (يظهر فوق الشريط) -->
+    <div id="iosHint" class="fixed inset-x-0 bottom-20 z-50 mx-auto hidden max-w-sm rounded-2xl border border-white/10 bg-slate-800/95 p-4 text-sm text-slate-200 shadow-2xl backdrop-blur">
+      <p class="font-bold">تثبيت التطبيق على iPhone</p>
+      <p class="mt-1.5 text-slate-300">
+        اضغط زر المشاركة
+        <svg class="inline h-4 w-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M12 3v13m0 0l-4-4m4 4l4-4"></path>
+        </svg>
+        ثم اختر <span class="font-bold text-cyan-300">«إضافة إلى الشاشة الرئيسية»</span>
+      </p>
+    </div>
 
     <script>
       /* ═══════════════════════════════════════════
@@ -664,7 +844,7 @@
         $('downloadBtn').onclick = () => {
           const a = document.createElement('a')
           a.href = url
-          a.download = `تسجيل-موجّه-الصوت.${ext}`
+          a.download = `تسجيل-مكبّر-الصوت.${ext}`
           document.body.appendChild(a)
           a.click()
           a.remove()
@@ -710,21 +890,116 @@
         }
       })
 
-      /* ── السلايدرات ── */
+      /* ── السلايدرات + حقول النسبة + أزرار ±5% + القيم السريعة ── */
+      /* تحويل الأرقام العربية/الفارسية إلى لاتينية إن كُتبت */
+      const toNum = (s) => {
+        const t = String(s)
+          .replace(/[٠-٩]/g, (d) => '٠١٢٣٤٥٦٧٨٩'.indexOf(d))
+          .replace(/[۰-۹]/g, (d) => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+        const n = Number(t)
+        return Number.isFinite(n) ? n : NaN
+      }
+
       const sliderMap = [
-        { range: 'delayRange', val: 'delayVal', set: (v) => Router.setDelay(v) },
-        { range: 'feedbackRange', val: 'feedbackVal', set: (v) => Router.setFeedback(v) },
-        { range: 'hpfRange', val: 'hpfVal', set: (v) => Router.setHpf(v) },
-        { range: 'gainRange', val: 'gainVal', set: (v) => Router.setGain(v) },
+        { range: 'delayRange', num: 'delayNum', set: (v) => Router.setDelay(v) },
+        { range: 'feedbackRange', num: 'feedbackNum', set: (v) => Router.setFeedback(v) },
+        { range: 'hpfRange', num: 'hpfNum', set: (v) => Router.setHpf(v) },
+        { range: 'gainRange', num: 'gainNum', set: (v) => Router.setGain(v) },
       ]
-      sliderMap.forEach(({ range, val, set }) => {
+
+      sliderMap.forEach(({ range, num, set }) => {
         const r = $(range)
-        const v = $(val)
+        const n = $(num)
+        const apply = (raw) => {
+          const s = String(raw).trim()
+          if (s === '') return // حقل فارغ: لا تغيير
+          let v = toNum(s)
+          if (!Number.isFinite(v)) return // إدخال غير صالح: لا تغيير
+          const min = Number(r.min)
+          const max = Number(r.max)
+          const clamped = Math.min(max, Math.max(min, Math.round(v)))
+          r.value = clamped
+          n.value = clamped
+          set(clamped)
+        }
         r.addEventListener('input', () => {
-          v.textContent = r.value + '%'
-          set(r.value)
+          n.value = r.value
+          set(Number(r.value))
+        })
+        n.addEventListener('change', () => apply(n.value))
+        n.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            n.blur()
+          }
+        })
+        /* أزرار +/− (5%) وأزرار القيم السريعة */
+        document.querySelectorAll(`[data-target="${range}"]`).forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const base = Number(r.value)
+            const v = btn.dataset.delta !== undefined ? base + Number(btn.dataset.delta) : Number(btn.dataset.value)
+            apply(v)
+          })
         })
       })
+
+      /* ═══════════════════════════════════════════
+        PWA: شريط التثبيت + تلميح iOS
+        ═══════════════════════════════════════════ */
+      let deferredPrompt = null
+      const installBar = $('installBar')
+      const installHint = $('installHint')
+      const iosHint = $('iosHint')
+      const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.navigator.standalone
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone
+
+      function showInstallBar() {
+        if (isStandalone) return
+        if (localStorage.getItem('mukabir-install-dismissed')) return
+        installBar.classList.remove('hidden')
+      }
+
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault()
+        deferredPrompt = e
+        showInstallBar()
+      })
+
+      $('installBtn').addEventListener('click', async () => {
+        if (deferredPrompt) {
+          try {
+            deferredPrompt.prompt()
+            await deferredPrompt.userChoice
+          } catch {
+            /* المستخدم ألغى نافذة التثبيت أو تعذّر عرضها */
+          }
+          deferredPrompt = null
+          installBar.classList.add('hidden')
+        } else if (isIOS) {
+          installHint.textContent = 'من قائمة المشاركة اختر «إضافة إلى الشاشة الرئيسية»'
+          iosHint.classList.remove('hidden')
+          setTimeout(() => iosHint.classList.add('hidden'), 6000)
+        }
+      })
+
+      $('installClose').addEventListener('click', () => {
+        localStorage.setItem('mukabir-install-dismissed', '1')
+        installBar.classList.add('hidden')
+      })
+
+      /* iOS: أظهر الشريط كمؤشر بعد لحظة */
+      if (isIOS) {
+        setTimeout(showInstallBar, 1500)
+      }
+
+      /* ── PWA: تسجيل الـ Service Worker ── */
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('sw.js').catch(() => {
+            /* البيئات التي لا تدعم — يتجاهل بصمت */
+          })
+        })
+      }
     </script>
   </body>
 </html>
