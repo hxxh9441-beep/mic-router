@@ -725,16 +725,6 @@
           /* 1) استئناف فوراً ضمن إيماءة الضغط — قبل طلب الميكروفون البطيء */
           await this._resumeCtx()
 
-          /* 1.5) 🔑 أندرويد: افتح جلسة «الوسائط» قبل طلب المايك.
-             اقتراح Google Issue 443255997: لو كان التشغيل ناشطاً وقت
-             getUserMedia يبقى النظام على حجم/مسار الوسائط (السماعة
-             الخارجية) بدل وضع الاتصال (سماعة الأذن). عنصر صوتي يبدأ
-             بالتشغيل فوراً (صامت — لا شيء موصول بعد). */
-          if (this._isAndroid()) {
-            this.monitorDest = this.ctx.createMediaStreamDestination()
-            this._ensureMonitorAudio()
-          }
-
           /* إذن الميكروفون — أي رفض يظهر رسالة ودية فوراً
              (الإعدادات حسب المنصة: انظر _buildMicConstraints) */
           this.stream = await navigator.mediaDevices.getUserMedia(this._buildMicConstraints())
@@ -790,22 +780,28 @@
 
           /* ── الإخراج حسب المنصة ──
              iOS/سطح المكتب: ctx.destination مباشرة (مؤكد العمل).
-             أندرويد: عنصر <audio> يشغّل وجهة مراقبة (مسار «الوسائط») —
-             لأن Web Audio destination مع مايك نشط يُكتم أو يُوجَّه لسماعة
-             الأذن عند كثير من الأجهزة، بينما عنصر الصوت يخرج من السماعة
-             الخارجية دائماً. */
+             أندرويد:
+               • وضع «الخام» (raw): ctx.destination مباشرة — محاكاة تجربة
+                 audio-cleaner القديمة المثبتة على جهازك (خام + مباشر =
+                 سماعة خارجية، لا وضع اتصال — الصوت كان يطلع «كأنه مايك»).
+               • وضع الافتراضيات (defaults): عنصر <audio> يشغّل وجهة مراقبة
+                 (مسار «الوسائط») — احتياط إن رفض الجهاز الوضع الخام. */
           this.masterGain.connect(this.recDest) // تسجيل: جاف
           this.delay.connect(this.recDest) // رطب → تسجيل
-          if (this._isAndroid()) {
+          if (this._isAndroid() && this.current.micMode === 'defaults') {
+            this.monitorDest = this.ctx.createMediaStreamDestination()
             this.masterGain.connect(this.monitorDest) // جاف → المراقبة
             this.delay.connect(this.monitorDest) // رطب → المراقبة
             this._ensureMonitorAudio()
-            /* 🔉 فرض سماعة الوسائط + مراقب الإدخال الصامت */
-            await this._forceMediaSink()
-            this._armInputWatchdog()
           } else {
             this.masterGain.connect(this.ctx.destination) // متصل دائماً
             this.delay.connect(this.ctx.destination) // رطب → سماعات
+          }
+
+          /* أندرويد: فرض سماعة الوسائط + مراقب الإدخال الصامت */
+          if (this._isAndroid()) {
+            await this._forceMediaSink()
+            this._armInputWatchdog()
           }
 
           /* 2) إعادة محاولة الاستئناف بعد بناء المسار (لبعض المتصفحات) */

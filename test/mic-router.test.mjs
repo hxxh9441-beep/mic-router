@@ -122,29 +122,27 @@ test('المحرك: إعدادات الميكروفون تعطّل المعال�
   assert.equal(log.constraints.audio.autoGainControl, false)
 })
 
-test('أندرويد: وضع خام أولاً (مسار الوسائط) + جلسة وسائط قبل طلب المايك + مخرج عبر عنصر صوتي', async () => {
+test('أندرويد: وضع خام أولاً — مخرج مباشر لـ ctx.destination (محاكاة تجربة audio-cleaner القديمة)', async () => {
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
-  // وضع «الخام» أولاً — يبقي النظام على مسار الوسائط (السماعة الخارجية)
+  // وضع «الخام» أولاً — لا معالجة اتصال = سماعة خارجية (المثبت في audio-cleaner القديم)
   assert.equal(log.constraints.audio.echoCancellation, false, 'الخام أولاً — مسار الوسائط لا وضع الاتصال')
   assert.equal(log.constraints.audio.noiseSuppression, false)
   assert.equal(log.constraints.audio.autoGainControl, false)
-  // جلسة الوسائط (وجهة المراقبة) أُنشئت قبل طلب المايك — اقتراح Google 443255997
-  assert.ok(log.order.indexOf('dest') < log.order.indexOf('gum'), 'وجهة المراقبة تسبق getUserMedia')
-  // المخرج عبر monitorDest (عنصر صوتي) وليس ctx.destination
-  assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
-  assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
-  assert.ok(!Router.masterGain.connects.includes(ctx.destination), 'لا اتصال بـ ctx.destination على أندرويد')
+  // في الوضع الخام: المخرج مباشرة لـ ctx.destination (لا عنصر صوتي ولا monitorDest)
+  assert.equal(Router.monitorDest, null, 'لا وجهة مراقبة في الوضع الخام')
+  assert.ok(Router.masterGain.connects.includes(ctx.destination), 'الجاف → ctx.destination مباشرة')
+  assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'مسار الإخراج المباشر')
   // فرض السماعة: setSinkId على السياق (مدعوم أندرويد كروم 110+)
   assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت')
   assert.equal(Router.diagnose().sink.ctxSink, 'ok', 'نتيجة فرض السماعة مسجلة')
   delete global.navigator.userAgent
 })
 
-test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال (حماية من الصمت الأبدي)', async () => {
-  const { log } = makeMocks()
+test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال — فينتقل المخرج لعنصر صوتي (احتياط)', async () => {
+  const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
@@ -154,6 +152,10 @@ test('أندرويد: المراقب يبدّل للافتراضيات عند ص
   await new Promise((r) => setTimeout(r, 1700))
   assert.equal(Router.current.micMode, 'defaults', 'بدّل للافتراضيات بعد الصمت')
   assert.equal(log.constraints.audio.echoCancellation, true, 'إعادة المحاولة بالافتراضيات (معالجة مدمجة)')
+  // بعد التبديل: مخرج عبر monitorDest (عنصر صوتي) وليس ctx.destination
+  assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت في وضع الافتراضيات')
+  assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
+  assert.ok(!Router.masterGain.connects.includes(ctx.destination), 'لا اتصال بـ ctx.destination في وضع الافتراضيات')
   delete global.navigator.userAgent
 })
 
