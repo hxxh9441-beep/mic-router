@@ -317,13 +317,6 @@
                 <span class="track"></span>
               </span>
             </label>
-            <label class="flex cursor-pointer items-center gap-3" for="monitorToggle" title="سجّل بدون ما تسمع نفسك">
-              <span class="text-sm font-medium text-slate-300">كتم المخرج</span>
-              <span class="switch">
-                <input type="checkbox" id="monitorToggle" />
-                <span class="track"></span>
-              </span>
-            </label>
           </div>
         </div>
 
@@ -584,7 +577,7 @@
         feedbackGain: null,
         recDest: null,
 
-        current: { delay: 0, feedback: 0, hpf: 20, gain: 1, monitorMuted: false },
+        current: { delay: 0, feedback: 0, hpf: 20, gain: 1 },
 
         /* ── التسجيل ── */
         isRecording: false,
@@ -623,12 +616,11 @@
             platform: (typeof navigator !== 'undefined' && navigator.userAgent) || 'unknown',
             ctxState: this.ctx ? this.ctx.state : 'no-ctx',
             gain: this.masterGain ? this.masterGain.gain.value : null,
-            monitor: this.monitorGain ? this.monitorGain.gain.value : null,
             micActive: !!(this.stream && this.stream.active !== false),
             dryPathToSpeakers: !!(
-              this.monitorGain &&
-              this.monitorGain.connects &&
-              this.monitorGain.connects.includes(this.ctx && this.ctx.destination)
+              this.masterGain &&
+              this.masterGain.connects &&
+              this.masterGain.connects.includes(this.ctx && this.ctx.destination)
             ),
           }
         },
@@ -680,10 +672,6 @@
           this.masterGain = this.ctx.createGain()
           this.masterGain.gain.value = Number.isFinite(this.current.gain) ? this.current.gain : 1
 
-          /* مراقبة المخرج — البوابة الأخيرة للسماعات (كتم اختياري، متصلة دائماً) */
-          this.monitorGain = this.ctx.createGain()
-          this.monitorGain.gain.value = this.current.monitorMuted ? 0 : 1
-
           /* الصدى — تأخير + تغذية راجعة */
           this.delay = this.ctx.createDelay(1)
           this.delay.delayTime.value = Number.isFinite(this.current.delay) ? this.current.delay : 0
@@ -696,12 +684,11 @@
           this.recDest = this.ctx.createMediaStreamDestination()
 
           /* ── المسار الجاف (Dry) — متصل دائماً بالسماعات ──
-             مصدر ← تنقية ← حساسية ← مراقبة ← سماعات
+             مصدر ← تنقية ← حساسية ← سماعات
              حتى لو كل المؤثرات 0%، الصوت يخرج */
           this.source.connect(this.hpf)
           this.hpf.connect(this.masterGain)
-          this.masterGain.connect(this.monitorGain)
-          this.monitorGain.connect(this.ctx.destination) // متصل دائماً
+          this.masterGain.connect(this.ctx.destination) // متصل دائماً
           this.masterGain.connect(this.recDest) // تسجيل: جاف
 
           /* ── فرع الصدى: حساسية ← رطب ← تأخير ← (تغذية راجعة ← تأخير) ── */
@@ -709,23 +696,11 @@
           this.wetGain.connect(this.delay)
           this.delay.connect(this.feedbackGain)
           this.feedbackGain.connect(this.delay)
-          this.delay.connect(this.monitorGain) // رطب → سماعات (يخضع للكتم)
+          this.delay.connect(this.ctx.destination) // رطب → سماعات
           this.delay.connect(this.recDest) // رطب → تسجيل
 
           /* 2) إعادة محاولة الاستئناف بعد بناء المسار (لبعض المتصفحات) */
           await this._resumeCtx()
-        },
-
-        /* كتم المخرج/المراقبة — تسجيل فقط بدون سماع النفس */
-        setMonitor(muted) {
-          this.current.monitorMuted = !!muted
-          if (this.monitorGain) {
-            this.monitorGain.gain.setTargetAtTime(
-              this.current.monitorMuted ? 0 : 1,
-              this.ctx.currentTime,
-              0.02,
-            )
-          }
         },
 
         stop() {
@@ -734,12 +709,11 @@
           if (this.source) this.source.disconnect()
           if (this.hpf) this.hpf.disconnect()
           if (this.masterGain) this.masterGain.disconnect()
-          if (this.monitorGain) this.monitorGain.disconnect()
           if (this.wetGain) this.wetGain.disconnect()
           if (this.delay) this.delay.disconnect()
           if (this.feedbackGain) this.feedbackGain.disconnect()
           if (this.recDest) this.recDest.disconnect()
-          this.source = this.hpf = this.masterGain = this.monitorGain = this.wetGain = this.delay = this.feedbackGain = this.recDest = null
+          this.source = this.hpf = this.masterGain = this.wetGain = this.delay = this.feedbackGain = this.recDest = null
           this.stream = null
         },
 
@@ -896,13 +870,10 @@
           ring1.classList.remove('opacity-0')
           ring2.classList.remove('opacity-0')
           micStatus.textContent = 'يعمل الآن — تكلم بحرية'
-          const engineHint =
+          micHint.textContent =
             Router.ctx && Router.ctx.state === 'suspended'
               ? '⚠️ المحرك معلّق — اضغط زر الميكروفون مرة أخرى'
-              : $('monitorToggle').checked
-                ? 'المخرج مكتوم — التسجيل فقط'
-                : 'صوتك يصل لسماعتك مباشرة'
-          micHint.textContent = engineHint
+              : 'صوتك يصل لسماعتك مباشرة'
         } else {
           micBtn.classList.add('border-white/15', 'bg-slate-800/80', 'text-slate-300')
           micBtn.classList.remove(
@@ -993,14 +964,6 @@
           stopTimer()
         }
         setMicVisual(state.micOn)
-      })
-
-      /* ── مفتاح كتم المخرج (تسجيل فقط بدون إخراج) ── */
-      $('monitorToggle').addEventListener('change', (e) => {
-        Router.setMonitor(e.target.checked)
-        if (state.micOn && Router.ctx) {
-          micHint.textContent = e.target.checked ? 'المخرج مكتوم — التسجيل فقط' : 'صوتك يصل لسماعتك مباشرة'
-        }
       })
 
       /* ── مفتاح تسجيل الجلسة (قبل أو أثناء الجلسة) ── */
