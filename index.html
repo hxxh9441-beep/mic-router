@@ -774,6 +774,16 @@
               if (pc2.connectionState === 'connected') this._rtcState = pc2.connectionState
             }
 
+            // 🔑 تبادل ICE candidates بين المتصلين المحليين — بدونها يعلق
+            // الاتصال في connecting للأبد (لا صوت ولا نغمة) رغم أن الطرفين
+            // في نفس الصفحة. الـ candidates تصل عبر أحداث منفصلة عن الـ SDP.
+            pc1.onicecandidate = (e) => {
+              if (e.candidate) pc2.addIceCandidate(e.candidate).catch(() => {})
+            }
+            pc2.onicecandidate = (e) => {
+              if (e.candidate) pc1.addIceCandidate(e.candidate).catch(() => {})
+            }
+
             // الطرف المستقبِل → عنصر <audio> (مثل مكالمة Meet)
             pc2.ontrack = (e) => {
               const a = document.createElement('audio')

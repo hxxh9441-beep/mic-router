@@ -110,6 +110,9 @@ function installRtcMock(log) {
       log.addedTracks = (log.addedTracks || 0) + 1
       return { track: null }
     }
+    async addIceCandidate(c) {
+      log.iceCandidates = (log.iceCandidates || 0) + 1
+    }
     async createOffer() {
       return { type: 'offer', sdp: 'mock-offer' }
     }
@@ -228,6 +231,32 @@ test('أندرويد: اختبار النغمة يمر عبر وجهة المر�
   assert.equal(ok, true, 'النغمة أُرسلت')
   assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'المسار: loopback')
   assert.equal(Router.diagnose().rtcState, 'connecting', 'حالة الاتصال تظهر في التشخيص')
+  delete global.navigator.userAgent
+  uninstallRtcMock()
+})
+
+test('أندرويد: تبادل ICE candidates — الاتصال لا يعلق في connecting', async () => {
+  const { log } = makeMocks()
+  installRtcMock(log)
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  await Router.start()
+  // محاكاة وصول candidate من pc1 → يُمرَّر لـ pc2 عبر addIceCandidate
+  const pcs = [Router._loopback.pc1, Router._loopback.pc2]
+  assert.ok(Router._loopback, 'الـ loopback مفعّل')
+  // المتصفح الحقيقي يستدعي onicecandidate تلقائياً — نتأكد أن المعالجات
+  // مربوطة وأن تبادل candidate يستدعي addIceCandidate على الطرف الآخر
+  let forwarded = 0
+  const realAdd1 = pcs[0].addIceCandidate.bind(pcs[0])
+  const realAdd2 = pcs[1].addIceCandidate.bind(pcs[1])
+  pcs[0].addIceCandidate = (c) => { forwarded++; return realAdd1(c) }
+  pcs[1].addIceCandidate = (c) => { forwarded++; return realAdd2(c) }
+  // محاكاة وصول candidates (المتصفح الحقيقي يفعلها تلقائياً عبر onicecandidate)
+  if (typeof pcs[0].onicecandidate === 'function') {
+    pcs[0].onicecandidate({ candidate: { candidate: 'candidate:1' } })
+    pcs[1].onicecandidate({ candidate: { candidate: 'candidate:2' } })
+  }
+  assert.ok(forwarded >= 2, 'الـ candidates تُتبادل بين الطرفين (' + forwarded + ')')
   delete global.navigator.userAgent
   uninstallRtcMock()
 })
