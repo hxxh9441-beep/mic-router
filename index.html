@@ -707,6 +707,7 @@
                 ? 'audio-element'
                 : 'ctx.destination',
             rtcState: this._rtcState || null,
+            audioPlay: this._audioPlayState || null,
             micMode: this.current ? this.current.micMode : null,
             sink: this._sinkResults || null,
             dryPathToSpeakers: !!(
@@ -761,6 +762,18 @@
             // addTransceiver بدل addTrack: تحكم أدق + يمنع استقبال pc1
             // (نرسل فقط) — بعض أجهزة أندرويد تكتم الـ addTrack الصامت
             this.monitorDest.stream.getTracks().forEach((t) => {
+              // 🔑 تعطيل معالجة WebRTC على المسار المرسل (AEC/AGC/NS):
+              // المعالجة الافتراضية قد تكتم الصوت في الـ loopback المحلي
+              try {
+                t.applyConstraints &&
+                  t.applyConstraints({
+                    echoCancellation: false,
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                  })
+              } catch {
+                /* تجاهل */
+              }
               pc1.addTransceiver(t, { direction: 'sendonly' })
             })
 
@@ -798,6 +811,13 @@
               const p = a.play()
               if (p && p.catch) p.catch(() => {})
               this._monitorAudio = a
+              // تتبع حالة التشغيل الفعلية — هل play() نجح أم رُفض بصمت؟
+              this._audioPlayState = 'started'
+              if (p && p.then) {
+                p.then(() => { this._audioPlayState = 'playing' }).catch(() => {
+                  this._audioPlayState = 'blocked' // autoplay policy رفضت
+                })
+              }
             }
 
             // تبادل offer/answer محلي (نفس المتصفح — بلا شبكة)
@@ -842,6 +862,25 @@
             return true
           } catch {
             return false
+          }
+        },
+
+        /* ▶️ إعادة تشغيل عنصر الصوت داخل إيماءة المستخدم:
+           autoplay policy على أندرويد قد ترفض play() الأول (خارج الإيماءة) —
+           أي نقرة/لمسة تعيد المحاولة، وبما أننا الآن داخل إيماءة مستخدم
+           يقبل المتصفح التشغيل. */
+        retryMonitorPlay() {
+          const a = this._monitorAudio
+          if (!a) return
+          try {
+            const p = a.play()
+            if (p && p.then) {
+              p.then(() => { this._audioPlayState = 'playing' }).catch(() => {
+                this._audioPlayState = 'blocked'
+              })
+            }
+          } catch {
+            /* تجاهل */
           }
         },
 
@@ -1219,6 +1258,7 @@
               `ctx:${d.ctxState} · in:${level}% · out:${d.outputPath}` +
               (Router._monitorAudio ? ' · audio-playing' : '') +
               (d.rtcState ? ` · rtc:${d.rtcState}` : '') +
+              (d.audioPlay ? ` · play:${d.audioPlay}` : '') +
               (d.micMode ? ` · mode:${d.micMode}` : '') +
               (sinkTxt ? ` · ${sinkTxt}` : '')
           }
@@ -1309,11 +1349,17 @@
 
       /* ── 🔔 اختبار النغمة (أندرويد) — يرسل نغمة عبر مسار الإخراج نفسه ── */
       $('toneBtn').addEventListener('click', () => {
+        Router.retryMonitorPlay() // إعادة تشغيل عنصر الصوت داخل إيماءة المستخدم
         const ok = Router.playTestTone(2)
         if (!ok) {
           $('toneBtn').textContent = '⚠️ شغّل المايك أولاً'
           setTimeout(() => { $('toneBtn').textContent = '🔔 اختبار نغمة (440Hz)' }, 1500)
         }
+      })
+
+      /* ── إعادة تشغيل عنصر الصوت عند أي تفاعل (autoplay policy) ── */
+      ;['pointerdown', 'touchstart', 'click'].forEach((evt) => {
+        document.addEventListener(evt, () => Router.retryMonitorPlay(), { passive: true })
       })
 
       /* ── مفتاح تسجيل الجلسة (قبل أو أثناء الجلسة) ── */
