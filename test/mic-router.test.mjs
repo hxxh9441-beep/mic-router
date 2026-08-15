@@ -252,6 +252,22 @@ test('أندرويد: WebRTC loopback يُفعَّل عند طلبه (outputRout
   uninstallRtcMock()
 })
 
+test('أندرويد: المسار الخام (raw HTML5) — مايك → عنصر صوتي بلا WebAudio', async () => {
+  const { log } = makeMocks()
+  installRtcMock(log)
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  Router.outputRoute = 'raw'
+  await Router.start()
+  // الخام: لا monitorDest — المايك الخام يغذّي عنصر الصوت مباشرة
+  assert.equal(Router.diagnose().outputPath, 'raw-html5', 'مسار الإخراج: خام HTML5')
+  assert.ok(Router._monitorAudio, 'عنصر الصوت يعمل')
+  assert.equal(Router.monitorDest, null, 'لا وجهة WebAudio في الخام')
+  assert.equal(Router.monitorStream, Router.stream, 'المايك الخام يغذّي عنصر الصوت مباشرة')
+  delete global.navigator.userAgent
+  uninstallRtcMock()
+})
+
 test('أندرويد: المسار المباشر يعمل حتى بدون WebRTC (عنصر صوتي — المضمون)', async () => {
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'

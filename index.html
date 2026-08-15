@@ -625,9 +625,10 @@
         recDest: null,
         analyser: null, // فيجوالايزر — يقرأ إشارة الميكروفون (وليس المخرج)
         monitorDest: null, // أندرويد: وجهة مراقبة → عنصر صوتي (مسار الوسائط)
-        _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorDest.stream
+        monitorStream: null, // أندرويد: التيار الذي يغذّي عنصر الصوت (monitorDest.stream أو مايك خام)
+        _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorStream
         _rtcAudio: null, // عنصر WebRTC (مسار تجريبي)
-        outputRoute: 'direct', // أندرويد: direct | webrtc | both (افتراضياً المباشر — المثبت أنه يعطي صوتاً)
+        outputRoute: 'direct', // أندرويد: direct | raw | webrtc | both (افتراضياً المباشر — المثبت أنه يعطي صوتاً)
         forceSink: false, // 🔉 فرض السماعة (setSinkId) — معطّل افتراضياً: أُضيف بعد 5a59096 (آخر نسخة مسموعة) ويرجَّح أنه مصدر الصمت — يُفعَّل يدوياً فقط
 
         current: { delay: 0, feedback: 0, hpf: 20, gain: 1, micMode: 'defaults' },
@@ -734,9 +735,11 @@
             micActive: !!(this.stream && this.stream.active !== false),
             outputPath: this._loopback
               ? 'webrtc-loopback'
-              : this.monitorDest
-                ? 'audio-element'
-                : 'ctx.destination',
+              : this.outputRoute === 'raw'
+                ? 'raw-html5'
+                : this.monitorDest
+                  ? 'audio-element'
+                  : 'ctx.destination',
             rtcState: this._rtcState || null,
             audioPlay: this._audioPlayState || null,
             micMode: this.current ? this.current.micMode : null,
@@ -985,10 +988,17 @@
           this.masterGain.connect(this.recDest) // تسجيل: جاف
           this.delay.connect(this.recDest) // رطب → تسجيل
           if (this._isAndroid()) {
-            // المسار المباشر دائماً (المضمون)
-            this.monitorDest = this.ctx.createMediaStreamDestination()
-            this.masterGain.connect(this.monitorDest)
-            this.delay.connect(this.monitorDest)
+            if (this.outputRoute === 'raw') {
+              // 🧪 المسار الخام النهائي: مايك → عنصر صوتي مباشرةً
+              // بلا AudioContext إطلاقاً (يُحسم: هل WebAudio هو القاتل؟)
+              this.monitorStream = this.stream
+            } else {
+              // المسار المباشر دائماً (المضمون)
+              this.monitorDest = this.ctx.createMediaStreamDestination()
+              this.masterGain.connect(this.monitorDest)
+              this.delay.connect(this.monitorDest)
+              this.monitorStream = this.monitorDest.stream
+            }
             this._ensureMonitorAudio()
             // WebRTC loopback — اختياري (webrtc أو both)
             if (this.outputRoute === 'webrtc' || this.outputRoute === 'both') {
@@ -1016,11 +1026,11 @@
            كان يعطي صوتاً فعلياً على أندرويد من سماعة الأذن على الأقل).
            منفصل تماماً عن عنصر WebRTC (_rtcAudio) حتى لا يتعارضا. */
         _ensureMonitorAudio() {
-          if (this._monitorAudio || !this.monitorDest) return
+          if (this._monitorAudio || !this.monitorStream) return
           if (typeof document === 'undefined') return // بيئة الاختبار
           try {
             const a = document.createElement('audio')
-            a.srcObject = this.monitorDest.stream
+            a.srcObject = this.monitorStream
             a.autoplay = true
             a.playsInline = true
             a.setAttribute('playsinline', '')
@@ -1066,7 +1076,7 @@
             }
           })
           this.source = this.hpf = this.masterGain = this.wetGain = this.delay = this.feedbackGain = this.recDest = null
-          this.analyser = this.monitorDest = this._monitorAudio = this._rtcAudio = null
+          this.analyser = this.monitorDest = this.monitorStream = this._monitorAudio = this._rtcAudio = null
           this.stream = null
         },
 
@@ -1390,6 +1400,12 @@
       /* ── 🔔 اختبار النغمة (أندرويد) — يرسل نغمة عبر مسار الإخراج نفسه ── */
       $('toneBtn').addEventListener('click', () => {
         Router.retryMonitorPlay() // إعادة تشغيل عنصر الصوت داخل إيماءة المستخدم
+        if (Router.outputRoute === 'raw') {
+          // الخام: النغمة عبر WebAudio لا تعمل — المايك نفسه هو الاختبار
+          $('toneBtn').textContent = '🎤 الخام: تكلم — تسمع نفسك؟'
+          setTimeout(() => { $('toneBtn').textContent = '🔔 اختبار نغمة (440Hz)' }, 2000)
+          return
+        }
         const ok = Router.playTestTone(2)
         if (!ok) {
           $('toneBtn').textContent = '⚠️ شغّل المايك أولاً'
@@ -1423,12 +1439,12 @@
         }
       })
 
-      /* ── 🎚️ تبديل مسار الإخراج (مباشر ↔ WebRTC ↔ تلقائي) — يعيد التشغيل ── */
+      /* ── 🎚️ تبديل مسار الإخراج (مباشر ↔ خام HTML5 ↔ WebRTC ↔ تلقائي) ── */
       $('routeBtn').addEventListener('click', async () => {
         const wasOn = state.micOn
         const wasRec = state.recordingEnabled
-        const order = ['direct', 'webrtc', 'both']
-        const labels = { direct: 'مباشر', webrtc: 'WebRTC', both: 'تلقائي' }
+        const order = ['direct', 'raw', 'webrtc', 'both']
+        const labels = { direct: 'مباشر', raw: 'خام HTML5', webrtc: 'WebRTC', both: 'تلقائي' }
         Router.outputRoute = order[(order.indexOf(Router.outputRoute) + 1) % order.length]
         $('routeBtn').textContent = '🎚️ المخرج: ' + labels[Router.outputRoute]
         if (wasOn) {
