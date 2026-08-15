@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>مكبر الصوت — اختبار أندرويد 🎙️</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+  color: #fff;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.container {
+  background: rgba(255,255,255,0.05);
+  border-radius: 24px;
+  padding: 40px;
+  max-width: 420px;
+  width: 100%;
+  text-align: center;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+h1 { font-size: 28px; margin-bottom: 8px; }
+.subtitle { opacity: 0.7; margin-bottom: 30px; font-size: 14px; }
+.mic-icon { font-size: 60px; margin-bottom: 20px; }
+#btn {
+  width: 100%;
+  padding: 18px;
+  font-size: 18px;
+  border: none;
+  border-radius: 16px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.3s;
+  background: linear-gradient(135deg, #00d4ff, #0099cc);
+  color: #000;
+  margin-bottom: 20px;
+}
+#btn.off {
+  background: linear-gradient(135deg, #ff4757, #c0392b);
+  color: #fff;
+}
+#btn:hover { transform: scale(1.02); }
+#btn:active { transform: scale(0.98); }
+.vol-section { margin: 20px 0; }
+.vol-label {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+#vol {
+  width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  -webkit-appearance: none;
+  background: rgba(255,255,255,0.15);
+  outline: none;
+}
+#vol::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #00d4ff;
+  cursor: pointer;
+}
+#status {
+  margin-top: 15px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.3);
+  font-size: 14px;
+}
+.tip {
+  margin-top: 20px;
+  padding: 12px;
+  background: rgba(255,200,0,0.1);
+  border-radius: 10px;
+  border-right: 3px solid #ffc800;
+  font-size: 12px;
+  opacity: 0.9;
+}
+#diag {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(0,0,0,0.4);
+  font-size: 12px;
+  font-family: monospace;
+  direction: ltr;
+  text-align: left;
+  min-height: 18px;
+  white-space: nowrap;
+  overflow-x: auto;
+}
+#vis {
+  width: 100%;
+  height: 48px;
+  margin-top: 10px;
+  background: rgba(0,0,0,0.3);
+  border-radius: 10px;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="mic-icon">🎙️</div>
+  <h1>مكبر الصوت — اختبار</h1>
+  <p class="subtitle">الميكروفون ← السماعات مباشرة (بسيط جداً للتشخيص)</p>
+
+  <button id="btn" onclick="toggle()">▶️ تشغيل الميكروفون</button>
+
+  <div class="vol-section">
+    <div class="vol-label">
+      <span>🔊 مستوى التضخيم</span>
+      <span id="volVal">1.0x</span>
+    </div>
+    <input type="range" id="vol" min="0" max="5" step="0.1" value="1">
+  </div>
+
+  <div id="status">⏸️ اضغط تشغيل للبدء</div>
+  <canvas id="vis" width="400" height="48"></canvas>
+  <div id="diag">—</div>
+
+  <div class="tip">
+    💡 <strong>نصيحة:</strong> استخدم سماعات رأس لتجنب الصدى والتشويش!
+  </div>
+</div>
+
+<script>
+let ctx, src, gain, strm, analyser, raf = 0;
+
+/* 🔓 فتح iOS: سياق مؤقت يُستأنف في أول سطر من النقرة */
+function iosAudioUnlock() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext
+    const t = new AC()
+    t.resume().catch(() => {})
+    setTimeout(() => { t.close().catch(() => {}) }, 100)
+  } catch { /* تجاهل */ }
+}
+
+async function toggle() {
+  const btn = document.getElementById('btn');
+  const status = document.getElementById('status');
+
+  if (!ctx) {
+    try {
+      iosAudioUnlock(); // أول سطر — قبل أي await
+
+      /* 1) السياق أولاً + استئناف فوراً (داخل إيماءة النقر) */
+      ctx = new AudioContext({ latencyHint: 'interactive' });
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      /* 2) ثم المايك (الخام — بدون معالجة) */
+      strm = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+
+      /* 3) استئناف حاسم بعد الإذن (Safari يعلّق السياق أثناء نافذة الإذن) */
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      /* 4) الرسم */
+      src = ctx.createMediaStreamSource(strm);
+      gain = ctx.createGain();
+      gain.gain.value = parseFloat(document.getElementById('vol').value);
+
+      /* فيجوالايزر — يقرأ الإدخال مباشرة */
+      analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      src.connect(analyser);
+
+      src.connect(gain);
+      gain.connect(ctx.destination); // المخرج المباشر — نفس النمط الأصلي
+
+      btn.className = 'off';
+      btn.textContent = '⏹️ إيقاف الميكروفون';
+      status.textContent = '🔴 يعمل! (شوف سطر التشخيص تحت)';
+      status.style.color = '#00ff88';
+      drawVis();
+      updateDiag();
+
+    } catch (err) {
+      status.textContent = '❌ خطأ: ' + (err.name === 'NotAllowedError' ? 'تم رفض صلاحية الميكروفون' : err.message);
+      status.style.color = '#ff4757';
+    }
+  } else {
+    strm.getTracks().forEach(t => t.stop());
+    await ctx.close();
+    ctx = src = gain = strm = analyser = null;
+    cancelAnimationFrame(raf);
+    btn.className = '';
+    btn.textContent = '▶️ تشغيل الميكروفون';
+    status.textContent = '⏸️ متوقف';
+    status.style.color = '#fff';
+    document.getElementById('diag').textContent = '—';
+    const c = document.getElementById('vis').getContext('2d');
+    c.clearRect(0, 0, 400, 48);
+  }
+}
+
+/* ── فيجوالايزر + تشخيص حي ── */
+function drawVis() {
+  const c = document.getElementById('vis').getContext('2d');
+  c.clearRect(0, 0, 400, 48);
+  if (analyser) {
+    const bins = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(bins);
+    const bars = 40, step = Math.max(1, Math.floor(bins.length / bars)), bw = 400 / bars;
+    let sum = 0;
+    for (let i = 0; i < bars; i++) {
+      const v = bins[i * step] / 255;
+      sum += v;
+      c.fillStyle = 'rgba(0,212,255,' + (0.35 + v * 0.65) + ')';
+      c.fillRect(i * bw + 1, 48 - Math.max(2, v * 48), bw - 3, Math.max(2, v * 48));
+    }
+    updateDiag(Math.round((sum / bars) * 100));
+  }
+  raf = requestAnimationFrame(drawVis);
+}
+
+function updateDiag(level) {
+  const d = document.getElementById('diag');
+  const lvl = typeof level === 'number' ? level : '?';
+  if (!ctx) { d.textContent = '—'; return; }
+  let txt = 'ctx:' + ctx.state + ' · in:' + lvl + '% · out:ctx.destination';
+  if (typeof navigator !== 'undefined' && navigator.userAgent) {
+    const ua = navigator.userAgent;
+    if (/Android/i.test(ua)) txt += ' · ANDROID';
+    if (/Samsung/i.test(ua)) txt += ' · Samsung';
+    if (/XiaoMi|Redmi|POCO/i.test(ua)) txt += ' · Xiaomi';
+    if (/OPPO|OnePlus/i.test(ua)) txt += ' · OPPO';
+    if (/HUAWEI|Honor/i.test(ua)) txt += ' · Huawei';
+    if (/Infinix|TECNO|itel/i.test(ua)) txt += ' · Infinix/Tecno';
+    if (/Firefox/i.test(ua)) txt += ' · Firefox';
+    if (/EdgA/i.test(ua)) txt += ' · Edge';
+  }
+  d.textContent = txt;
+}
+
+document.getElementById('vol').oninput = function(e) {
+  const val = parseFloat(e.target.value);
+  document.getElementById('volVal').textContent = val.toFixed(1) + 'x';
+  if (gain) gain.gain.value = val;
+};
+</script>
+</body>
+</html>
