@@ -601,6 +601,38 @@
           return Math.min(max, Math.max(min, n))
         },
 
+        /* إعدادات الميكروفون حسب المنصة:
+           - iOS/سطح المكتب: false/false/false — إشارة خام نظيفة (مؤكد يعمل).
+           - Android: الافتراضيات (معالجة مدمجة). طلب المعالجة الخام
+             (كلها false) يدفع مسار الصوت لوضع «الاتصال» عند كثير من
+             الأجهزة فيُكتم المخرج أو يُوجَّه لسماعة الأذن — المشكلة
+             الكلاسيكية الموثقة في Chrome للجوال. مع الافتراضيات يعمل
+             المخرج بشكل طبيعي ويلغي المتصفح الصدى من الميكروفون. */
+        _buildMicConstraints() {
+          const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || ''
+          const isAndroid = /Android/i.test(ua)
+          if (isAndroid) {
+            return { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
+          }
+          return { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
+        },
+
+        /* تشخيص سريع — يُظهر حالة المحرك للتحقق على الجهاز الحقيقي */
+        diagnose() {
+          return {
+            platform: (typeof navigator !== 'undefined' && navigator.userAgent) || 'unknown',
+            ctxState: this.ctx ? this.ctx.state : 'no-ctx',
+            gain: this.masterGain ? this.masterGain.gain.value : null,
+            monitor: this.monitorGain ? this.monitorGain.gain.value : null,
+            micActive: !!(this.stream && this.stream.active !== false),
+            dryPathToSpeakers: !!(
+              this.monitorGain &&
+              this.monitorGain.connects &&
+              this.monitorGain.connects.includes(this.ctx && this.ctx.destination)
+            ),
+          }
+        },
+
         /* استئناف السياق المعلّق — بحد زمني حتى لا يعلّق الانتظار أبداً
            (iOS: resume خارج إيماءة المستخدم قد لا يُنجز — ننتظر قليلاً ونكمل) */
         async _resumeCtx() {
@@ -624,10 +656,9 @@
           /* 1) استئناف فوراً ضمن إيماءة الضغط — قبل طلب الميكروفون البطيء */
           await this._resumeCtx()
 
-          /* إذن الميكروفون — أي رفض يظهر رسالة ودية فوراً */
-          this.stream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-          })
+          /* إذن الميكروفون — أي رفض يظهر رسالة ودية فوراً
+             (الإعدادات حسب المنصة: انظر _buildMicConstraints) */
+          this.stream = await navigator.mediaDevices.getUserMedia(this._buildMicConstraints())
 
           /* 2) 🔑 الاستئناف الحاسم بعد الإذن:
              Safari يعلّق السياق أثناء نافذة إذن الميكروفون ويبقيه معلّقاً بعدها —
@@ -865,7 +896,13 @@
           ring1.classList.remove('opacity-0')
           ring2.classList.remove('opacity-0')
           micStatus.textContent = 'يعمل الآن — تكلم بحرية'
-          micHint.textContent = $('monitorToggle').checked ? 'المخرج مكتوم — التسجيل فقط' : 'صوتك يصل لسماعتك مباشرة'
+          const engineHint =
+            Router.ctx && Router.ctx.state === 'suspended'
+              ? '⚠️ المحرك معلّق — اضغط زر الميكروفون مرة أخرى'
+              : $('monitorToggle').checked
+                ? 'المخرج مكتوم — التسجيل فقط'
+                : 'صوتك يصل لسماعتك مباشرة'
+          micHint.textContent = engineHint
         } else {
           micBtn.classList.add('border-white/15', 'bg-slate-800/80', 'text-slate-300')
           micBtn.classList.remove(

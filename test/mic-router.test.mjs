@@ -112,6 +112,29 @@ test('المحرك: إعدادات الميكروفون تعطّل المعال�
   assert.equal(log.constraints.audio.autoGainControl, false)
 })
 
+test('أندرويد: إعدادات الميكروفون تستخدم الافتراضيات (معالجة مدمجة — لا يكتم المخرج)', async () => {
+  const { log } = makeMocks()
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  await Router.start()
+  assert.equal(log.constraints.audio.echoCancellation, true, 'AEC مفعل — مسار الوسائط لا وضع الاتصال')
+  assert.equal(log.constraints.audio.noiseSuppression, true)
+  assert.equal(log.constraints.audio.autoGainControl, true)
+  delete global.navigator.userAgent
+})
+
+test('التشخيص: diagnose() يعرض حالة المحرك والمسار الجاف', async () => {
+  const { ctx } = makeMocks()
+  const Router = loadRouter()
+  await Router.start()
+  const d = Router.diagnose()
+  assert.equal(d.ctxState, 'running')
+  assert.equal(d.gain, 1)
+  assert.equal(d.monitor, 1)
+  assert.equal(d.micActive, true)
+  assert.equal(d.dryPathToSpeakers, true)
+})
+
 test('التسجيل: يبدأ MediaRecorder على وجهة التسجيل بصيغة مدعومة', async () => {
   const { log } = makeMocks()
   installRecorderMock(log)
