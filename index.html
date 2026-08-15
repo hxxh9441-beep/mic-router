@@ -1479,12 +1479,17 @@
       }
 
       /* ⚠️ تنبيه كروم على أندرويد: Chromium يفرض وضع الاتصال فيكتم المخرج
-         (Issue 443255997) — فايرفوكس/Samsung يعملان. لا نعرض التنبيه على فايرفوكس. */
+         (Issue 443255997) — فايرفوكس/Samsung يعملان. لا نعرض التنبيه على فايرفوكس،
+         ولا داخل التطبيق الأصلي (Capacitor — البلجن الأصلي يتجاوز المشكلة). */
+      const isNativeApp =
+        typeof window.Capacitor !== 'undefined' &&
+        typeof window.Capacitor.isNativePlatform === 'function' &&
+        window.Capacitor.isNativePlatform()
       const ua = navigator.userAgent || ''
       const isAndroid = /Android/i.test(ua)
       const isFirefox = /Firefox/i.test(ua)
       const isChrome = /Chrome|CriOS/i.test(ua)
-      if (isAndroid && !isFirefox && isChrome) {
+      if (!isNativeApp && isAndroid && !isFirefox && isChrome) {
         $('chromeAlert').classList.remove('hidden')
       }
     </script>
