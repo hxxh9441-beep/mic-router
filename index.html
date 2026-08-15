@@ -601,13 +601,17 @@
           return Math.min(max, Math.max(min, n))
         },
 
-        /* استئناف السياق المعلّق (داخل إيماءة المستخدم قدر الإمكان) */
+        /* استئناف السياق المعلّق — بحد زمني حتى لا يعلّق الانتظار أبداً
+           (iOS: resume خارج إيماءة المستخدم قد لا يُنجز — ننتظر قليلاً ونكمل) */
         async _resumeCtx() {
           if (!this.ctx || this.ctx.state !== 'suspended') return
           try {
-            await this.ctx.resume()
+            await Promise.race([
+              this.ctx.resume(),
+              new Promise((r) => setTimeout(r, 1200)),
+            ])
           } catch {
-            /* المتصفح رفض — سنحاول مجدداً بعد بناء المسار */
+            /* المتصفح رفض — سنحاول مجدداً عند أي تفاعل تالٍ (keep-alive) */
           }
         },
 
@@ -625,6 +629,14 @@
             audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
           })
 
+          /* 2) 🔑 الاستئناف الحاسم بعد الإذن:
+             Safari يعلّق السياق أثناء نافذة إذن الميكروفون ويبقيه معلّقاً بعدها —
+             والعقد المبنية في سياق معلّق لا تعالج الصوت إطلاقاً (صمت تام مع
+             مايك يعمل). بفضل iosAudioUnlock (أول سطر من النقرة) يقبل iOS هذا
+             الاستئناف حتى وإن انتهت الإيماءة الأصلية. */
+          await this._resumeCtx()
+
+          /* 3) بناء العقد بعد أن يكون السياق يعمل */
           this.source = this.ctx.createMediaStreamSource(this.stream)
 
           /* تنقية الضوضاء — مرشح يقطع الهدير المنخفض */
@@ -784,6 +796,51 @@
       window.Router = Router
       /* ===== ENGINE-END ===== */
 
+      /* ── 🔓 فتح iOS: سياق مؤقت يُستأنف في أول سطر من النقرة ──
+         iOS يسمح بـ resume() فقط داخل إيماءة المستخدم، و«العداد» يُقلب
+         أول مرة ينجح فيها أي سياق بالاستئناف ضمن إيماءة. بعدها تقبل iOS
+         كل الاستئنافات اللاحقة (حتى بعد نافذة إذن الميكروفون التي تعلّق
+         السياق). يُستدعى متزامناً في بداية النقر على زر الميكروفون. */
+      function iosAudioUnlock() {
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext
+          if (!AC) return
+          if (Router.ctx && Router.ctx.state === 'running') return // مفتوح بالفعل
+          const unlockCtx = new AC()
+          Promise.race([
+            unlockCtx.resume(),
+            new Promise((r) => setTimeout(r, 800)),
+          ])
+            .catch(() => {})
+            .then(() => {
+              try {
+                unlockCtx.close()
+              } catch {
+                /* تجاهل */
+              }
+            })
+        } catch {
+          /* تجاهل — متصفح قديم أو رفض */
+        }
+      }
+
+      /* ── استئناف تلقائي مستمر: عند أي تفاعل أو عودة التبويب ──
+         iOS/Safari قد يعيد تعليق السياق عند عودة التبويب من الخلفية أو
+         بعد تغيّر بؤرة الصوت (مكالمة/إشعار). أي نقرة أو لمسة أو عودة
+         للتبويب تعيد المحاولة — مجانية ولا تضر. */
+      function armResumeKeepAlive() {
+        const tryResume = () => {
+          if (Router.ctx && Router.ctx.state === 'suspended') Router._resumeCtx()
+        }
+        ;['pointerdown', 'touchstart', 'click'].forEach((evt) =>
+          document.addEventListener(evt, tryResume, { passive: true }),
+        )
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') tryResume()
+        })
+      }
+      armResumeKeepAlive()
+
       /* ── زر الميكروفون المركزي ── */
       const micBtn = $('micBtn')
       const ring1 = $('ring1')
@@ -878,6 +935,7 @@
       }
 
       micBtn.addEventListener('click', async () => {
+        iosAudioUnlock() // 🔓 فتح iOS — أول سطر من النقرة (متزامن قبل أي await)
         state.micOn = !state.micOn
         if (state.micOn) {
           try {

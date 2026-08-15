@@ -450,3 +450,45 @@ test('المحرك: القيم المحفوظة تُطبَّق عند التشغ
   assert.equal(Router.hpf.frequency.value, 20 + 288)
   assert.equal(Router.masterGain.gain.value, 1.2)
 })
+
+test('iOS Safari: السياق يُعلَّق أثناء نافذة إذن الميكروفون — الاستئناف بعد الإذن يعيد التشغيل', async () => {
+  const { ctx } = makeMocks()
+  ctx.state = 'suspended'
+  const order = []
+  ctx.resume = async () => {
+    order.push('resume')
+    ctx.state = 'running'
+  }
+  const orig = global.navigator.mediaDevices.getUserMedia
+  global.navigator.mediaDevices.getUserMedia = async (c) => {
+    order.push('mic')
+    ctx.state = 'suspended' // ⚠️ Safari يعلّق السياق أثناء النافذة
+    return orig(c)
+  }
+  const Router = loadRouter()
+  await Router.start()
+  assert.equal(
+    order.filter((x) => x === 'resume').length,
+    2,
+    'محاولتا استئناف: قبل الإذن وبعده',
+  )
+  assert.ok(
+    order.lastIndexOf('resume') > order.indexOf('mic'),
+    'الاستئناف الحاسم بعد الإذن',
+  )
+  assert.equal(ctx.state, 'running', 'السياق يعمل بعد الإذن')
+  assert.ok(Router.source, 'العقد بُنيت بعد الاستئناف (لا تُبنى في سياق معلّق)')
+  assert.equal(Router.masterGain.gain.value, 1, 'الحساسية 1.0')
+})
+
+test('iOS: resume لا يُنجز أبداً — الحد الزمني يمنع التعليق ويبني المسار', async () => {
+  const { ctx } = makeMocks()
+  ctx.state = 'suspended'
+  ctx.resume = () => new Promise(() => {}) // خارج إيماءة iOS: لا يُنجز أبداً
+  const Router = loadRouter()
+  const t0 = Date.now()
+  await Router.start()
+  const elapsed = Date.now() - t0
+  assert.ok(elapsed < 5000, `start() لم يعلّق (استغرق ${elapsed}ms) — حد زمني 1200ms لكل محاولة`)
+  assert.ok(Router.source, 'المسار بُني رغم رفض الاستئناف')
+})
