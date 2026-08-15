@@ -72,7 +72,55 @@ function makeMocks() {
     configurable: true,
     writable: true,
   })
+  // document وهمي (يلزم لعنصر الصوت والـ loopback)
+  global.document = {
+    createElement: () => ({
+      set srcObject(v) {},
+      style: {},
+      setAttribute() {},
+      play: () => Promise.resolve(),
+      remove() {},
+    }),
+    body: { appendChild() {} },
+  }
   return { ctx, log }
+}
+
+/* ── محاكاة RTCPeerConnection (WebRTC loopback) ── */
+function installRtcMock(log) {
+  class MockPC {
+    constructor() {
+      log.pcCreated = (log.pcCreated || 0) + 1
+      this.localDescription = null
+      this.remoteDescription = null
+      this.ontrack = null
+    }
+    addTrack() {
+      log.addedTracks = (log.addedTracks || 0) + 1
+    }
+    async createOffer() {
+      return { type: 'offer', sdp: 'mock-offer' }
+    }
+    async createAnswer() {
+      return { type: 'answer', sdp: 'mock-answer' }
+    }
+    async setLocalDescription(d) {
+      this.localDescription = d
+    }
+    async setRemoteDescription(d) {
+      this.remoteDescription = d
+    }
+    close() {
+      log.pcClosed = (log.pcClosed || 0) + 1
+    }
+  }
+  global.RTCPeerConnection = MockPC
+  global.RTCPeerConnectionMock = true
+}
+
+function uninstallRtcMock() {
+  delete global.RTCPeerConnection
+  delete global.RTCPeerConnectionMock
 }
 
 function loadRouter() {
@@ -122,26 +170,42 @@ test('المحرك: إعدادات الميكروفون تعطّل المعال�
   assert.equal(log.constraints.audio.autoGainControl, false)
 })
 
-test('أندرويد: وضع خام أولاً — مخرج مباشر لـ ctx.destination (محاكاة تجربة audio-cleaner القديمة)', async () => {
+test('أندرويد: WebRTC loopback أولاً — مسار «المكالمة» الخارجي (مثل Meet)', async () => {
   const { log, ctx } = makeMocks()
+  installRtcMock(log)
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
-  // وضع «الخام» أولاً — لا معالجة اتصال = سماعة خارجية (المثبت في audio-cleaner القديم)
-  assert.equal(log.constraints.audio.echoCancellation, false, 'الخام أولاً — مسار الوسائط لا وضع الاتصال')
+  // وضع «الخام» أولاً — إعدادات الميكروفون
+  assert.equal(log.constraints.audio.echoCancellation, false, 'الخام أولاً')
   assert.equal(log.constraints.audio.noiseSuppression, false)
   assert.equal(log.constraints.audio.autoGainControl, false)
-  // في الوضع الخام: المخرج مباشرة لـ ctx.destination (لا عنصر صوتي ولا monitorDest)
-  assert.equal(Router.monitorDest, null, 'لا وجهة مراقبة في الوضع الخام')
-  assert.ok(Router.masterGain.connects.includes(ctx.destination), 'الجاف → ctx.destination مباشرة')
-  assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'مسار الإخراج المباشر')
+  // loopback: متصلان محليان + وجهة مراقبة
+  assert.equal(log.pcCreated, 2, 'متصلان RTCPeerConnection محليان')
+  assert.ok(Router._loopback, 'الـ loopback مفعّل')
+  assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'مسار الإخراج: WebRTC loopback')
+  assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
+  assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
   // فرض السماعة: setSinkId على السياق (مدعوم أندرويد كروم 110+)
   assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت')
   assert.equal(Router.diagnose().sink.ctxSink, 'ok', 'نتيجة فرض السماعة مسجلة')
   delete global.navigator.userAgent
+  uninstallRtcMock()
 })
 
-test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال — فينتقل المخرج لعنصر صوتي (احتياط)', async () => {
+test('أندرويد: غياب WebRTC — مخرج مباشر لـ ctx.destination (fallback)', async () => {
+  const { log, ctx } = makeMocks()
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  await Router.start()
+  // لا RTCPeerConnection → fallback للمخرج المباشر
+  assert.ok(!Router._loopback, 'لا loopback')
+  assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'مسار الإخراج المباشر')
+  assert.ok(Router.masterGain.connects.includes(ctx.destination), 'الجاف → ctx.destination')
+  delete global.navigator.userAgent
+})
+
+test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال (حماية من الصمت الأبدي)', async () => {
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
@@ -152,10 +216,8 @@ test('أندرويد: المراقب يبدّل للافتراضيات عند ص
   await new Promise((r) => setTimeout(r, 1700))
   assert.equal(Router.current.micMode, 'defaults', 'بدّل للافتراضيات بعد الصمت')
   assert.equal(log.constraints.audio.echoCancellation, true, 'إعادة المحاولة بالافتراضيات (معالجة مدمجة)')
-  // بعد التبديل: مخرج عبر monitorDest (عنصر صوتي) وليس ctx.destination
-  assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت في وضع الافتراضيات')
-  assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
-  assert.ok(!Router.masterGain.connects.includes(ctx.destination), 'لا اتصال بـ ctx.destination في وضع الافتراضيات')
+  // في بيئة الاختبار (لا WebRTC): المخرج يبقى المباشر
+  assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'fallback: مخرج مباشر')
   delete global.navigator.userAgent
 })
 

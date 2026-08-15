@@ -52,23 +52,29 @@
 بدرجة «المكالمة» ([Google Issue 443255997](https://issuetracker.google.com/issues/443255997) ·
 ["getUserMedia() mutes audio output in Chrome for Mobile"](https://stackoverflow.com/questions/31054840)).
 
-**الدرس من audio-cleaner**: في نسخته القديمة كان الصوت يخرج «كأنه مايك» من السماعة الخارجية —
-بنفس إعدادات **المعالجة الخام** (`false/false/false`) ومخرج **مباشر** لـ `ctx.destination`. هذا النمط
-المثبت هو الأساس لأندرويد هنا:
+**السبب الجذري (مؤكد من كود Chromium)**: `getUserMedia` يستدعي
+`setCommunicationAudioModeOn(true)` في `AudioManagerAndroid.java` → يفرض
+`AudioManager.MODE_IN_COMMUNICATION` على مستوى النظام — فكل مخرجات WebAudio
+(`ctx.destination` أو عنصر `<audio>`) تُوجَّه لسماعة الأذن أو تُكتم، وتتحكم
+أزرار الصوت بدرجة «المكالمة» ([Google Issue 443255997](https://issuetracker.google.com/issues/443255997)).
+`setSinkId` لا يفيد (المتصفح يعرض «System Default (Browser Limited)»).
 
-1. **🎚️ وضع «الخام» أولاً (`micMode: raw`)**: `echoCancellation/noiseSuppression/autoGainControl: false`
-   + المخرج **مباشرة** إلى `ctx.destination` (لا عنصر صوتي) — محاكاة تجربة audio-cleaner القديمة:
-   لا معالجة اتصال = سماعة خارجية.
-2. **🔊 فرض سماعة الوسائط (`_forceMediaSink`)**: `AudioContext.setSinkId('')` — **مدعوم على أندرويد
-   كروم 110+** (توافق MDN: `chrome_android: 110`، خلافاً لـ `HTMLMediaElement.setSinkId` غير المدعوم).
-   كل المحاولات داخل try/catch، والنتيجة تُعرض في سطر التشخيص (`sink:ok`).
-3. **⏳ مراقب صمت تلقائي**: إن كان الإدخال صامتاً تماماً بعد 1.5 ثانية (بعض الأجهزة تكتم الخام)،
-   يبدّل المراقب إلى **الافتراضيات** (`true/true/true`) **مع** مخرج عبر عنصر `<audio>` (مسار «الوسائط») —
-   جولة واحدة، لا صمت أبدي.
+الحل المطبق — **WebRTC loopback محلي**:
 
-- **iOS/سطح المكتب**: `false/false/false` (إشارة خام نظيفة — مؤكد العمل) عبر `ctx.destination` مباشرة.
+1. **🔁 مسار WebRTC (`_setupLoopback`)**: الصوت المعالج يُمرَّر عبر
+   `RTCPeerConnection` محلي (متصلان، بلا خوادم ICE) ويُشغَّل عبر عنصر `<audio>` —
+   مسار «المكالمة» الخارجي الذي يخرج من السماعة الخارجية على أندرويد (كما في
+   مكالمات Meet). إن تعذّر → fallback للمخرج المباشر.
+2. **🎚️ الوضع الخام**: `echoCancellation/noiseSuppression/autoGainControl: false`.
+3. **🔊 فرض سماعة الوسائط (`_forceMediaSink`)**: `AudioContext.setSinkId('')` —
+   مدعوم على أندرويد كروم 110+ (خلافاً لـ `HTMLMediaElement.setSinkId`).
+4. **⏳ مراقب صمت تلقائي**: إن كان الإدخال صامتاً تماماً بعد 1.5 ثانية، يبدّل
+   المراقب إلى الافتراضيات (`true/true/true`) ويعيد التشغيل — جولة واحدة، لا صمت أبدي.
 
-للتحقق على جهازك: سطر التشخيص الحي يعرض `ctx:.. · in:..% · out:ctx.destination|audio-element · mode:raw|defaults · sink:ok|na`،
+- **iOS/سطح المكتب**: `false/false/false` عبر `ctx.destination` مباشرة (مؤكد العمل).
+
+للتحقق على جهازك: سطر التشخيص الحي يعرض
+`ctx:.. · in:..% · out:webrtc-loopback|ctx.destination · mode:raw|defaults · sink:ok|na`،
 و`Router.diagnose()` يعرض التفاصيل كاملة (حالة السياق، الوضع، نتيجة فرض السماعة، المسار الجاف).
 
 ## 📱 PWA (تثبيت + أوفلاين)

@@ -690,7 +690,11 @@
             ctxState: this.ctx ? this.ctx.state : 'no-ctx',
             gain: this.masterGain ? this.masterGain.gain.value : null,
             micActive: !!(this.stream && this.stream.active !== false),
-            outputPath: this.monitorDest ? 'audio-element' : 'ctx.destination',
+            outputPath: this._loopback
+              ? 'webrtc-loopback'
+              : this.monitorDest
+                ? 'audio-element'
+                : 'ctx.destination',
             micMode: this.current ? this.current.micMode : null,
             sink: this._sinkResults || null,
             dryPathToSpeakers: !!(
@@ -713,6 +717,76 @@
             ])
           } catch {
             /* المتصفح رفض — سنحاول مجدداً عند أي تفاعل تالٍ (keep-alive) */
+          }
+        },
+
+        /* 🔊 مسار WebRTC loopback لأندرويد:
+           المشكلة الجذرية (مؤكدة من كود Chromium AudioManagerAndroid.java):
+           getUserMedia يستدعي setCommunicationAudioModeOn(true) → يفرض
+           MODE_IN_COMMUNICATION على مستوى النظام — فكل مخرجات WebAudio
+           (ctx.destination أو عنصر <audio>) تُوجَّه لسماعة الأذن أو تُكتم.
+
+           الحل: تشغيل الصوت عبر RTCPeerConnection محلي (loopback) —
+           مسار WebRTC يخرج من السماعة الخارجية على أندرويد (كما في
+           مكالمات Meet). بلا خوادم ICE: تبادل offer/answer بين
+           متصلين محليين فقط. */
+        async _setupLoopback() {
+          if (
+            typeof RTCPeerConnection === 'undefined' ||
+            typeof document === 'undefined'
+          ) {
+            return false // غير مدعوم → المخرج المباشر (fallback)
+          }
+          try {
+            const pc1 = new RTCPeerConnection()
+            const pc2 = new RTCPeerConnection()
+            this._loopback = { pc1, pc2 }
+
+            // وجهة مراقبة → WebRTC (مسار «المكالمة» الخارجي)
+            this.monitorDest = this.ctx.createMediaStreamDestination()
+            this.masterGain.connect(this.monitorDest)
+            this.delay.connect(this.monitorDest)
+            this.monitorDest.stream.getTracks().forEach((t) => pc1.addTrack(t, this.monitorDest.stream))
+
+            // الطرف المستقبِل → عنصر <audio> (مثل مكالمة Meet)
+            pc2.ontrack = (e) => {
+              const a = document.createElement('audio')
+              a.srcObject = e.streams[0]
+              a.autoplay = true
+              a.playsInline = true
+              a.setAttribute('playsinline', '')
+              a.style.display = 'none'
+              document.body.appendChild(a)
+              const p = a.play()
+              if (p && p.catch) p.catch(() => {})
+              this._monitorAudio = a
+            }
+
+            // تبادل offer/answer محلي (نفس المتصفح — بلا شبكة)
+            const offer = await pc1.createOffer()
+            await pc1.setLocalDescription(offer)
+            await pc2.setRemoteDescription(offer)
+            const answer = await pc2.createAnswer()
+            await pc2.setLocalDescription(answer)
+            await pc1.setRemoteDescription(answer)
+
+            return true
+          } catch {
+            // فشل WebRTC → المخرج المباشر (fallback)
+            this._teardownLoopback()
+            return false
+          }
+        },
+
+        _teardownLoopback() {
+          if (this._loopback) {
+            try {
+              this._loopback.pc1.close()
+              this._loopback.pc2.close()
+            } catch {
+              /* تجاهل */
+            }
+            this._loopback = null
           }
         },
 
@@ -781,18 +855,18 @@
           /* ── الإخراج حسب المنصة ──
              iOS/سطح المكتب: ctx.destination مباشرة (مؤكد العمل).
              أندرويد:
-               • وضع «الخام» (raw): ctx.destination مباشرة — محاكاة تجربة
-                 audio-cleaner القديمة المثبتة على جهازك (خام + مباشر =
-                 سماعة خارجية، لا وضع اتصال — الصوت كان يطلع «كأنه مايك»).
-               • وضع الافتراضيات (defaults): عنصر <audio> يشغّل وجهة مراقبة
-                 (مسار «الوسائط») — احتياط إن رفض الجهاز الوضع الخام. */
+               • WebRTC loopback (الأساس): مسار «المكالمة» الخارجي — يخرج
+                 من السماعة الخارجية (مثل Meet). بلا خوادم، محلي بالكامل.
+               • إن فشل الـ loopback: مخرج مباشر لـ ctx.destination. */
           this.masterGain.connect(this.recDest) // تسجيل: جاف
           this.delay.connect(this.recDest) // رطب → تسجيل
-          if (this._isAndroid() && this.current.micMode === 'defaults') {
-            this.monitorDest = this.ctx.createMediaStreamDestination()
-            this.masterGain.connect(this.monitorDest) // جاف → المراقبة
-            this.delay.connect(this.monitorDest) // رطب → المراقبة
-            this._ensureMonitorAudio()
+          if (this._isAndroid()) {
+            const ok = await this._setupLoopback()
+            if (!ok) {
+              // fallback: المخرج المباشر
+              this.masterGain.connect(this.ctx.destination)
+              this.delay.connect(this.ctx.destination)
+            }
           } else {
             this.masterGain.connect(this.ctx.destination) // متصل دائماً
             this.delay.connect(this.ctx.destination) // رطب → سماعات
@@ -840,6 +914,7 @@
           if (this.recDest) this.recDest.disconnect()
           if (this.analyser) this.analyser.disconnect()
           if (this.monitorDest) this.monitorDest.disconnect()
+          this._teardownLoopback() // إغلاق RTCPeerConnection المحلي إن وُجد
           if (this._monitorAudio && typeof document !== 'undefined') {
             try {
               this._monitorAudio.srcObject = null
