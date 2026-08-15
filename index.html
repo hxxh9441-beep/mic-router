@@ -377,6 +377,15 @@
               </button>
             </div>
             <p class="mt-1 text-xs text-slate-500">مباشر = يعطي صوتاً (سماعة أذن) · WebRTC = يحاول السماعة الخارجية · تلقائي = الاثنان</p>
+            <div class="mt-2 flex items-center justify-center gap-2">
+              <button
+                id="sinkBtn"
+                class="rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-300 transition hover:bg-amber-500/20 active:scale-95"
+              >
+                🔉 السماعة: معطّلة
+              </button>
+            </div>
+            <p class="mt-1 text-xs text-slate-500">فرض السماعة (setSinkId) معطّل افتراضياً — هو المشتبه في صمت 5a59096. فعّله وجرّب.</p>
           </div>
           <p id="recBadge" class="mt-2 hidden items-center gap-2 text-sm font-semibold text-red-400">
             <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500 rec-blink"></span>
@@ -619,6 +628,7 @@
         _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorDest.stream
         _rtcAudio: null, // عنصر WebRTC (مسار تجريبي)
         outputRoute: 'direct', // أندرويد: direct | webrtc | both (افتراضياً المباشر — المثبت أنه يعطي صوتاً)
+        forceSink: false, // 🔉 فرض السماعة (setSinkId) — معطّل افتراضياً: أُضيف بعد 5a59096 (آخر نسخة مسموعة) ويرجَّح أنه مصدر الصمت — يُفعَّل يدوياً فقط
 
         current: { delay: 0, feedback: 0, hpf: 20, gain: 1, micMode: 'defaults' },
 
@@ -901,6 +911,7 @@
             }
             this._loopback = null
           }
+          this._rtcState = null // 🔑 يصفّر الحالة — وإلا بقي rtc:connected كاذباً بعد إغلاق الـloopback
         },
 
         async start() {
@@ -989,9 +1000,11 @@
             this.delay.connect(this.ctx.destination) // رطب → سماعات
           }
 
-          /* أندرويد: فرض سماعة الوسائط + مراقب الإدخال الصامت */
+          /* أندرويد: فرض سماعة الوسائط (يدوي فقط — معطّل افتراضياً لأنه
+             يرجَّح أنه مصدر الصمت بعد 5a59096) + مراقب الإدخال الصامت */
           if (this._isAndroid()) {
-            await this._forceMediaSink()
+            if (this.forceSink) await this._forceMediaSink()
+            else this._sinkResults = { ctxSink: 'off', audioSink: 'off' }
             this._armInputWatchdog()
           }
 
@@ -1275,7 +1288,11 @@
             const level = Math.round((sum / bars) * 100)
             const d = Router.diagnose()
             const sinkTxt = d.sink
-              ? (d.sink.ctxSink === 'ok' || d.sink.audioSink === 'ok' ? 'sink:ok' : 'sink:na')
+              ? d.sink.ctxSink === 'off' || d.sink.audioSink === 'off'
+                ? 'sink:off'
+                : d.sink.ctxSink === 'ok' || d.sink.audioSink === 'ok'
+                  ? 'sink:ok'
+                  : 'sink:na'
               : ''
             diagEl.textContent =
               `ctx:${d.ctxState} · in:${level}% · out:${d.outputPath}` +
@@ -1417,6 +1434,31 @@
         if (wasOn) {
           Router.stop(true)
           stopTimer()
+          try {
+            await Router.start()
+            startVisualizer()
+            if (wasRec) {
+              Router.startRecorder()
+              startTimer()
+            }
+          } catch {
+            state.micOn = false
+            stopVisualizer()
+          }
+        }
+      })
+
+      /* ── 🔉 تبديل فرض السماعة (setSinkId) — معطّل افتراضياً، يدوي فقط ── */
+      $('sinkBtn').addEventListener('click', async () => {
+        const wasOn = state.micOn
+        const wasRec = state.recordingEnabled
+        if (wasOn) {
+          Router.stop(true) // بدون حفظ — نبدّل ونعيد فوراً
+          stopTimer()
+        }
+        Router.forceSink = !Router.forceSink
+        $('sinkBtn').textContent = '🔉 السماعة: ' + (Router.forceSink ? 'مفعّلة' : 'معطّلة')
+        if (wasOn) {
           try {
             await Router.start()
             startVisualizer()

@@ -121,9 +121,15 @@ function installRtcMock(log) {
     }
     async setLocalDescription(d) {
       this.localDescription = d
+      if (d && d.type === 'answer') this._goConnected()
     }
     async setRemoteDescription(d) {
       this.remoteDescription = d
+    }
+    _goConnected() {
+      // محاكاة وصول ICE المحلي لـ connected بعد تبادل الـ answer
+      this.connectionState = 'connected'
+      if (this.onconnectionstatechange) this.onconnectionstatechange()
     }
     close() {
       log.pcClosed = (log.pcClosed || 0) + 1
@@ -203,8 +209,23 @@ test('أندرويد: المسار المباشر افتراضياً (المثب
   assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
   assert.ok(Router._monitorAudio, 'المسار المباشر يعمل')
   assert.ok(!Router._loopback, 'لا WebRTC افتراضياً')
+  // فرض السماعة معطّل افتراضياً (5a59096 بلا setSinkId — آخر نسخة مسموعة)
+  assert.equal(Router.forceSink, false, 'فرض السماعة معطّل افتراضياً')
+  assert.equal(log.sinkId, null, 'setSinkId لا تُستدعى افتراضياً')
+  assert.equal(Router.diagnose().sink.ctxSink, 'off', 'نتيجة فرض السماعة: off')
+  delete global.navigator.userAgent
+  uninstallRtcMock()
+})
+
+test('أندرويد: تفعيل فرض السماعة يدوياً يستدعي setSinkId (forceSink)', async () => {
+  const { log } = makeMocks()
+  installRtcMock(log)
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  Router.forceSink = true
+  await Router.start()
   // فرض السماعة: setSinkId على السياق (مدعوم أندرويد كروم 110+)
-  assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت')
+  assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت عند التفعيل اليدوي')
   assert.equal(Router.diagnose().sink.ctxSink, 'ok', 'نتيجة فرض السماعة مسجلة')
   delete global.navigator.userAgent
   uninstallRtcMock()
@@ -222,6 +243,11 @@ test('أندرويد: WebRTC loopback يُفعَّل عند طلبه (outputRout
   assert.ok(Router._loopback, 'الـ loopback مفعّل')
   assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'مسار الإخراج: WebRTC loopback')
   assert.ok(Router._monitorAudio, 'المسار المباشر ما زال يعمل بالتوازي')
+  assert.equal(Router.diagnose().rtcState, 'connected', 'rtcState: connected')
+  // إيقاف: يُغلق الـloopback ويُصفّر الحالة (لا rtc كاذب بعد الإغلاق)
+  Router.stop(true)
+  assert.ok(!Router._loopback, 'الـloopback أُغلق')
+  assert.equal(Router.diagnose().rtcState, null, 'rtcState صُفّر بعد الإغلاق — لا كذب تشخيصي')
   delete global.navigator.userAgent
   uninstallRtcMock()
 })
@@ -251,7 +277,7 @@ test('أندرويد: اختبار النغمة يمر عبر وجهة المر�
   const ok = Router.playTestTone(0.1)
   assert.equal(ok, true, 'النغمة أُرسلت')
   assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'المسار: loopback')
-  assert.equal(Router.diagnose().rtcState, 'connecting', 'حالة الاتصال تظهر في التشخيص')
+  assert.equal(Router.diagnose().rtcState, 'connected', 'التبادل المحلي وصل لـ connected (لا يعلق في connecting)')
   delete global.navigator.userAgent
   uninstallRtcMock()
 })
