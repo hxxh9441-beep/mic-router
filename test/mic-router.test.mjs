@@ -42,6 +42,7 @@ function makeMocks() {
     async resume() { this.state = 'running' },
     createBiquadFilter: () => makeNode('biquad'),
     createGain: () => makeNode('gain'),
+    createAnalyser: () => makeNode('analyser'),
     createDelay(max) { const n = makeNode('delay'); n.max = max; return n },
     createMediaStreamSource(stream) { const n = makeNode('source'); n.stream = stream; return n },
     createMediaStreamDestination() { const n = makeNode('recDest'); n.stream = { getTracks: () => [] }; return n },
@@ -112,14 +113,18 @@ test('المحرك: إعدادات الميكروفون تعطّل المعال�
   assert.equal(log.constraints.audio.autoGainControl, false)
 })
 
-test('أندرويد: إعدادات الميكروفون تستخدم الافتراضيات (معالجة مدمجة — لا يكتم المخرج)', async () => {
-  const { log } = makeMocks()
+test('أندرويد: إعدادات الميكروفون تستخدم الافتراضيات + مخرج عبر عنصر صوتي (مسار الوسائط)', async () => {
+  const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
   assert.equal(log.constraints.audio.echoCancellation, true, 'AEC مفعل — مسار الوسائط لا وضع الاتصال')
   assert.equal(log.constraints.audio.noiseSuppression, true)
   assert.equal(log.constraints.audio.autoGainControl, true)
+  // المخرج عبر monitorDest (عنصر صوتي) وليس ctx.destination
+  assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
+  assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
+  assert.ok(!Router.masterGain.connects.includes(ctx.destination), 'لا اتصال بـ ctx.destination على أندرويد')
   delete global.navigator.userAgent
 })
 
@@ -131,6 +136,7 @@ test('التشخيص: diagnose() يعرض حالة المحرك والمسار �
   assert.equal(d.ctxState, 'running')
   assert.equal(d.gain, 1)
   assert.equal(d.micActive, true)
+  assert.equal(d.outputPath, 'ctx.destination')
   assert.equal(d.dryPathToSpeakers, true)
 })
 
@@ -218,9 +224,10 @@ test('المحرك: السلسلة الكاملة — مصدر ← تنقية �
   const Router = loadRouter()
   await Router.start()
 
-  // المصدر يتصل بالمرشح فقط (لا تجاوز للمكبرات مباشرة)
-  assert.equal(Router.source.connects.length, 1)
-  assert.equal(Router.source.connects[0], Router.hpf)
+  // المصدر يتصل بالمرشح + الفيجوالايزر (لا تجاوز للمكبرات مباشرة)
+  assert.equal(Router.source.connects.length, 2)
+  assert.ok(Router.source.connects.includes(Router.hpf))
+  assert.ok(Router.source.connects.includes(Router.analyser), 'الفيجوالايزر يقرأ الميكروفون')
   // مرشح ← حساسية
   assert.equal(Router.hpf.connects.length, 1)
   assert.equal(Router.hpf.connects[0], Router.masterGain)
@@ -322,6 +329,7 @@ test('المحرك: الإيقاف ينظف — يوقف المسارات ويف
   assert.ok(log.disconnected.includes('gain'))
   assert.ok(log.disconnected.includes('delay'))
   assert.ok(log.disconnected.includes('recDest'))
+  assert.ok(log.disconnected.includes('analyser'), 'الفيجوالايزر ينظف أيضاً')
   assert.equal(Router.source, null)
   assert.equal(Router.masterGain, null)
 })

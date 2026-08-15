@@ -354,6 +354,15 @@
             جاري التسجيل…
             <span id="recTimer" class="tabular-nums">0:00</span>
           </p>
+
+          <!-- الفيجوالايزر — مستوى إشارة الميكروفون الحية -->
+          <canvas
+            id="visCanvas"
+            class="mt-4 h-16 w-full rounded-xl border border-white/5 bg-white/[0.03]"
+            aria-label="مستوى إشارة الميكروفون"
+          ></canvas>
+          <!-- تشخيص المحرك — حالة السياق ومسار الإخراج -->
+          <p id="engineDiag" class="mt-2 text-[11px] leading-relaxed text-slate-500" dir="ltr"></p>
         </div>
 
         <!-- ═══ المؤثرات الصوتية ═══ -->
@@ -576,6 +585,9 @@
         delay: null,
         feedbackGain: null,
         recDest: null,
+        analyser: null, // فيجوالايزر — يقرأ إشارة الميكروفون (وليس المخرج)
+        monitorDest: null, // أندرويد: وجهة مراقبة → عنصر صوتي (مسار الوسائط)
+        _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorDest.stream
 
         current: { delay: 0, feedback: 0, hpf: 20, gain: 1 },
 
@@ -594,6 +606,12 @@
           return Math.min(max, Math.max(min, n))
         },
 
+        /* هل الجهاز أندرويد؟ (يُستخدم لمسار الإخراج البديل) */
+        _isAndroid() {
+          const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || ''
+          return /Android/i.test(ua)
+        },
+
         /* إعدادات الميكروفون حسب المنصة:
            - iOS/سطح المكتب: false/false/false — إشارة خام نظيفة (مؤكد يعمل).
            - Android: الافتراضيات (معالجة مدمجة). طلب المعالجة الخام
@@ -602,9 +620,7 @@
              الكلاسيكية الموثقة في Chrome للجوال. مع الافتراضيات يعمل
              المخرج بشكل طبيعي ويلغي المتصفح الصدى من الميكروفون. */
         _buildMicConstraints() {
-          const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || ''
-          const isAndroid = /Android/i.test(ua)
-          if (isAndroid) {
+          if (this._isAndroid()) {
             return { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
           }
           return { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
@@ -617,10 +633,12 @@
             ctxState: this.ctx ? this.ctx.state : 'no-ctx',
             gain: this.masterGain ? this.masterGain.gain.value : null,
             micActive: !!(this.stream && this.stream.active !== false),
+            outputPath: this.monitorDest ? 'audio-element' : 'ctx.destination',
             dryPathToSpeakers: !!(
               this.masterGain &&
               this.masterGain.connects &&
-              this.masterGain.connects.includes(this.ctx && this.ctx.destination)
+              (this.masterGain.connects.includes(this.ctx && this.ctx.destination) ||
+                this.masterGain.connects.includes(this.monitorDest))
             ),
           }
         },
@@ -683,24 +701,64 @@
           /* وجهة التسجيل */
           this.recDest = this.ctx.createMediaStreamDestination()
 
+          /* فيجوالايزر — يقرأ إشارة الميكروفون مباشرة (قبل الفلاتر) */
+          this.analyser = this.ctx.createAnalyser()
+          this.analyser.fftSize = 1024
+          this.analyser.smoothingTimeConstant = 0.8
+          this.source.connect(this.analyser)
+
           /* ── المسار الجاف (Dry) — متصل دائماً بالسماعات ──
              مصدر ← تنقية ← حساسية ← سماعات
              حتى لو كل المؤثرات 0%، الصوت يخرج */
           this.source.connect(this.hpf)
           this.hpf.connect(this.masterGain)
-          this.masterGain.connect(this.ctx.destination) // متصل دائماً
-          this.masterGain.connect(this.recDest) // تسجيل: جاف
 
           /* ── فرع الصدى: حساسية ← رطب ← تأخير ← (تغذية راجعة ← تأخير) ── */
           this.masterGain.connect(this.wetGain)
           this.wetGain.connect(this.delay)
           this.delay.connect(this.feedbackGain)
           this.feedbackGain.connect(this.delay)
-          this.delay.connect(this.ctx.destination) // رطب → سماعات
+
+          /* ── الإخراج حسب المنصة ──
+             iOS/سطح المكتب: ctx.destination مباشرة (مؤكد العمل).
+             أندرويد: عنصر <audio> يشغّل وجهة مراقبة (مسار «الوسائط») —
+             لأن Web Audio destination مع مايك نشط يُكتم أو يُوجَّه لسماعة
+             الأذن عند كثير من الأجهزة، بينما عنصر الصوت يخرج من السماعة
+             الخارجية دائماً. */
+          this.masterGain.connect(this.recDest) // تسجيل: جاف
           this.delay.connect(this.recDest) // رطب → تسجيل
+          if (this._isAndroid()) {
+            this.monitorDest = this.ctx.createMediaStreamDestination()
+            this.masterGain.connect(this.monitorDest) // جاف → المراقبة
+            this.delay.connect(this.monitorDest) // رطب → المراقبة
+            this._ensureMonitorAudio()
+          } else {
+            this.masterGain.connect(this.ctx.destination) // متصل دائماً
+            this.delay.connect(this.ctx.destination) // رطب → سماعات
+          }
 
           /* 2) إعادة محاولة الاستئناف بعد بناء المسار (لبعض المتصفحات) */
           await this._resumeCtx()
+        },
+
+        /* عنصر صوتي خفي يشغّل وجهة المراقبة (مسار الوسائط على أندرويد) */
+        _ensureMonitorAudio() {
+          if (this._monitorAudio || !this.monitorDest) return
+          if (typeof document === 'undefined') return // بيئة الاختبار
+          try {
+            const a = document.createElement('audio')
+            a.srcObject = this.monitorDest.stream
+            a.autoplay = true
+            a.playsInline = true
+            a.setAttribute('playsinline', '')
+            a.style.display = 'none'
+            document.body.appendChild(a)
+            const p = a.play()
+            if (p && p.catch) p.catch(() => {})
+            this._monitorAudio = a
+          } catch {
+            /* تعذّر إنشاء عنصر الصوت — سيحاول عند الجلسة القادمة */
+          }
         },
 
         stop() {
@@ -713,7 +771,18 @@
           if (this.delay) this.delay.disconnect()
           if (this.feedbackGain) this.feedbackGain.disconnect()
           if (this.recDest) this.recDest.disconnect()
+          if (this.analyser) this.analyser.disconnect()
+          if (this.monitorDest) this.monitorDest.disconnect()
+          if (this._monitorAudio && typeof document !== 'undefined') {
+            try {
+              this._monitorAudio.srcObject = null
+              this._monitorAudio.remove()
+            } catch {
+              /* تجاهل */
+            }
+          }
           this.source = this.hpf = this.masterGain = this.wetGain = this.delay = this.feedbackGain = this.recDest = null
+          this.analyser = this.monitorDest = this._monitorAudio = null
           this.stream = null
         },
 
@@ -900,6 +969,57 @@
         recRing.classList.toggle('hidden', !recording)
       }
 
+      /* ── الفيجوالايزر + التشخيص الحي ── */
+      let visRaf = 0
+      function startVisualizer() {
+        const canvas = $('visCanvas')
+        const ctx2d = canvas.getContext('2d')
+        const diagEl = $('engineDiag')
+        const draw = () => {
+          const an = Router.analyser
+          if (an) {
+            const W = (canvas.width = canvas.clientWidth)
+            const H = (canvas.height = canvas.clientHeight)
+            const bins = new Uint8Array(an.frequencyBinCount)
+            an.getByteFrequencyData(bins)
+            ctx2d.clearRect(0, 0, W, H)
+            const grad = ctx2d.createLinearGradient(0, H, 0, 0)
+            grad.addColorStop(0, 'rgba(34,211,238,0.4)')
+            grad.addColorStop(1, 'rgba(96,165,250,0.9)')
+            const bars = 40
+            const step = Math.max(1, Math.floor(bins.length / bars))
+            const bw = W / bars
+            let sum = 0
+            for (let i = 0; i < bars; i++) {
+              const v = bins[i * step] / 255
+              sum += v
+              const bh = Math.max(2, v * H)
+              ctx2d.fillStyle = grad
+              ctx2d.globalAlpha = 0.35 + v * 0.65
+              ctx2d.beginPath()
+              ctx2d.roundRect(i * bw + 1.5, H - bh, bw - 3, bh, 3)
+              ctx2d.fill()
+            }
+            ctx2d.globalAlpha = 1
+            const level = Math.round((sum / bars) * 100)
+            const d = Router.diagnose()
+            diagEl.textContent =
+              `ctx:${d.ctxState} · in:${level}% · out:${d.outputPath}` +
+              (Router._monitorAudio ? ' · audio-playing' : '')
+          }
+          visRaf = requestAnimationFrame(draw)
+        }
+        cancelAnimationFrame(visRaf)
+        visRaf = requestAnimationFrame(draw)
+      }
+      function stopVisualizer() {
+        cancelAnimationFrame(visRaf)
+        const canvas = $('visCanvas')
+        const ctx2d = canvas.getContext('2d')
+        ctx2d.clearRect(0, 0, canvas.width, canvas.height)
+        $('engineDiag').textContent = ''
+      }
+
       /* ── مؤقت التسجيل ── */
       let recTimerId = null
       function fmtTime(sec) {
@@ -948,6 +1068,7 @@
         if (state.micOn) {
           try {
             await Router.start()
+            startVisualizer()
             if (state.recordingEnabled) {
               Router.startRecorder()
               startTimer()
@@ -955,6 +1076,7 @@
             $('outputArea').classList.add('hidden') // جلسة جديدة
           } catch {
             state.micOn = false
+            stopVisualizer()
             micStatus.textContent = 'ما قدرت نوصل للميكروفون'
             micHint.textContent = 'تأكد من إذن الميكروفون للمتصفح'
             return
@@ -962,6 +1084,7 @@
         } else {
           Router.stop() // يوقف التسجيل ويحفظه إن كان جارياً
           stopTimer()
+          stopVisualizer()
         }
         setMicVisual(state.micOn)
       })
