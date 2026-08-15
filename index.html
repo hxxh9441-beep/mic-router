@@ -386,6 +386,17 @@
               </button>
             </div>
             <p class="mt-1 text-xs text-slate-500">فرض السماعة (setSinkId) معطّل افتراضياً — هو المشتبه في صمت 5a59096. فعّله وجرّب.</p>
+            <div class="mt-3 rounded-xl border border-slate-500/30 bg-slate-500/10 px-4 py-3">
+              <button
+                id="speakerTestBtn"
+                class="w-full rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-white/20 active:scale-95"
+              >
+                🔊 اختبار السماعة (بدون مايك)
+              </button>
+              <p class="mt-1.5 text-xs text-slate-400">
+                الحسم النهائي: يرسل 3 نغمات <b>مباشرة للسماعة بلا مايك إطلاقاً</b>. سمعتها؟ السماعة سليمة والمشكلة في وضع الاتصال. ما سمعتها؟ السماعة/الصوت نفسه مكتوم.
+              </p>
+            </div>
           </div>
           <p id="recBadge" class="mt-2 hidden items-center gap-2 text-sm font-semibold text-red-400">
             <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500 rec-blink"></span>
@@ -1395,6 +1406,55 @@
           $('toneRow').classList.add('hidden')
         }
         setMicVisual(state.micOn)
+      })
+
+      /* ── 🔊 اختبار السماعة المستقل (بدون مايك) — الحسم النهائي:
+         يرسل 3 نغمات مباشرة لـ ctx.destination بلا getUserMedia إطلاقاً.
+         سمعتها؟ السماعة سليمة — المشكلة في وضع الاتصال (المعروف من كود
+         Chromium: أي التقاط مايك يفعّل MODE_IN_COMMUNICATION ويُكتم المخرج).
+         ما سمعتها؟ السماعة/الصوت نفسه مكتوم على الجهاز. */
+      $('speakerTestBtn').addEventListener('click', async () => {
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext
+          if (!AC) {
+            $('speakerTestBtn').textContent = '⚠️ لا AudioContext'
+            return
+          }
+          const ctx = new AC({ latencyHint: 'interactive' })
+          if (ctx.state === 'suspended') await ctx.resume() // داخل إيماءة النقر
+          const freqs = [440, 660, 880] // ثلاث نغمات متدرجة — تمييز واضح
+          freqs.forEach((f, i) => {
+            const osc = ctx.createOscillator()
+            const g = ctx.createGain()
+            osc.type = 'sine'
+            osc.frequency.value = f
+            g.gain.value = 0.5
+            osc.connect(g)
+            g.connect(ctx.destination) // ← السماعة مباشرة، بلا مايك
+            const t = ctx.currentTime + i * 0.4
+            osc.start(t)
+            osc.stop(t + 0.35)
+            osc.onended = () => {
+              try {
+                osc.disconnect()
+                g.disconnect()
+              } catch {
+                /* تجاهل */
+              }
+            }
+          })
+          $('speakerTestBtn').textContent = '🔊 أُرسلت 3 نغمات — سمعتها؟'
+          setTimeout(() => {
+            $('speakerTestBtn').textContent = '🔊 اختبار السماعة (بدون مايك)'
+            try {
+              ctx.close()
+            } catch {
+              /* تجاهل */
+            }
+          }, 2500)
+        } catch {
+          $('speakerTestBtn').textContent = '⚠️ فشل الإرسال'
+        }
       })
 
       /* ── 🔔 اختبار النغمة (أندرويد) — يرسل نغمة عبر مسار الإخراج نفسه ── */
