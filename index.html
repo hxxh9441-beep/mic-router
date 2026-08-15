@@ -349,6 +349,17 @@
           <!-- الحالة -->
           <p id="micStatus" class="mt-5 text-base font-semibold text-slate-200">اضغط للبدء</p>
           <p id="micHint" class="mt-1 text-sm text-slate-400">الميكروفون متوقف</p>
+
+          <!-- 🔔 اختبار النغمة (أندرويد فقط) — يتحقق هل مسار الإخراج نفسه حي -->
+          <div id="toneRow" class="mt-3 hidden">
+            <button
+              id="toneBtn"
+              class="rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-300 transition hover:bg-cyan-500/20 active:scale-95"
+            >
+              🔔 اختبار نغمة (440Hz)
+            </button>
+            <p class="mt-1 text-xs text-slate-500">تسمعها؟ المسار سليم — المشكلة في المايك. ما تسمعها؟ مسار الإخراج مكتوم.</p>
+          </div>
           <p id="recBadge" class="mt-2 hidden items-center gap-2 text-sm font-semibold text-red-400">
             <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500 rec-blink"></span>
             جاري التسجيل…
@@ -695,6 +706,7 @@
               : this.monitorDest
                 ? 'audio-element'
                 : 'ctx.destination',
+            rtcState: this._rtcState || null,
             micMode: this.current ? this.current.micMode : null,
             sink: this._sinkResults || null,
             dryPathToSpeakers: !!(
@@ -746,7 +758,21 @@
             this.monitorDest = this.ctx.createMediaStreamDestination()
             this.masterGain.connect(this.monitorDest)
             this.delay.connect(this.monitorDest)
-            this.monitorDest.stream.getTracks().forEach((t) => pc1.addTrack(t, this.monitorDest.stream))
+            // addTransceiver بدل addTrack: تحكم أدق + يمنع استقبال pc1
+            // (نرسل فقط) — بعض أجهزة أندرويد تكتم الـ addTrack الصامت
+            this.monitorDest.stream.getTracks().forEach((t) => {
+              pc1.addTransceiver(t, { direction: 'sendonly' })
+            })
+
+            // تتبع حالة الاتصال — هل اكتمل فعلاً؟ (audio-playing قد يكون
+            // وهمياً إذا ontrack اشتغل لكن ICE لم يكتمل)
+            this._rtcState = 'connecting'
+            pc1.onconnectionstatechange = () => {
+              this._rtcState = pc1.connectionState
+            }
+            pc2.onconnectionstatechange = () => {
+              if (pc2.connectionState === 'connected') this._rtcState = pc2.connectionState
+            }
 
             // الطرف المستقبِل → عنصر <audio> (مثل مكالمة Meet)
             pc2.ontrack = (e) => {
@@ -755,6 +781,8 @@
               a.autoplay = true
               a.playsInline = true
               a.setAttribute('playsinline', '')
+              a.volume = 1 // إجبار مستوى الصوت — لا شيء صامت
+              a.muted = false // إجبار عدم الكتم
               a.style.display = 'none'
               document.body.appendChild(a)
               const p = a.play()
@@ -774,6 +802,35 @@
           } catch {
             // فشل WebRTC → المخرج المباشر (fallback)
             this._teardownLoopback()
+            return false
+          }
+        },
+
+        /* 🔔 اختبار نغمة — يرسل نغمة عبر نفس مسار الـ loopback:
+           - سمعت النغمة → المسار سليم والمشكلة في إشارة المايك
+           - ما سمعت النغمة → مسار WebRTC نفسه مكتوم على جهازك */
+        playTestTone(seconds = 2) {
+          if (!this.ctx || !this.monitorDest) return false
+          try {
+            const osc = this.ctx.createOscillator()
+            const g = this.ctx.createGain()
+            osc.type = 'sine'
+            osc.frequency.value = 440
+            g.gain.value = 0.4
+            osc.connect(g)
+            g.connect(this.monitorDest) // نفس مسار المايك تماماً
+            osc.start()
+            setTimeout(() => {
+              try {
+                osc.stop()
+                osc.disconnect()
+                g.disconnect()
+              } catch {
+                /* تجاهل */
+              }
+            }, seconds * 1000)
+            return true
+          } catch {
             return false
           }
         },
@@ -1151,6 +1208,7 @@
             diagEl.textContent =
               `ctx:${d.ctxState} · in:${level}% · out:${d.outputPath}` +
               (Router._monitorAudio ? ' · audio-playing' : '') +
+              (d.rtcState ? ` · rtc:${d.rtcState}` : '') +
               (d.micMode ? ` · mode:${d.micMode}` : '') +
               (sinkTxt ? ` · ${sinkTxt}` : '')
           }
@@ -1221,6 +1279,8 @@
               startTimer()
             }
             $('outputArea').classList.add('hidden') // جلسة جديدة
+            // أندرويد: إظهار زر اختبار النغمة (التشخيص الحاسم)
+            $('toneRow').classList.toggle('hidden', !/Android/i.test(navigator.userAgent || ''))
           } catch {
             state.micOn = false
             stopVisualizer()
@@ -1232,8 +1292,18 @@
           Router.stop() // يوقف التسجيل ويحفظه إن كان جارياً
           stopTimer()
           stopVisualizer()
+          $('toneRow').classList.add('hidden')
         }
         setMicVisual(state.micOn)
+      })
+
+      /* ── 🔔 اختبار النغمة (أندرويد) — يرسل نغمة عبر مسار الإخراج نفسه ── */
+      $('toneBtn').addEventListener('click', () => {
+        const ok = Router.playTestTone(2)
+        if (!ok) {
+          $('toneBtn').textContent = '⚠️ شغّل المايك أولاً'
+          setTimeout(() => { $('toneBtn').textContent = '🔔 اختبار نغمة (440Hz)' }, 1500)
+        }
       })
 
       /* ── مفتاح تسجيل الجلسة (قبل أو أثناء الجلسة) ── */

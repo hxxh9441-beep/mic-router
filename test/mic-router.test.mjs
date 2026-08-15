@@ -43,6 +43,14 @@ function makeMocks() {
     async setSinkId(id) { log.sinkId = id; this.state = 'running' },
     createBiquadFilter: () => makeNode('biquad'),
     createGain: () => makeNode('gain'),
+    createOscillator: () => {
+      const n = makeNode('oscillator')
+      n.frequency = { value: 440 }
+      n.type = 'sine'
+      n.start = () => { log.oscStarted = (log.oscStarted || 0) + 1 }
+      n.stop = () => {}
+      return n
+    },
     createAnalyser: () => {
       const n = makeNode('analyser')
       n.fftSize = 1024
@@ -97,6 +105,10 @@ function installRtcMock(log) {
     }
     addTrack() {
       log.addedTracks = (log.addedTracks || 0) + 1
+    }
+    addTransceiver() {
+      log.addedTracks = (log.addedTracks || 0) + 1
+      return { track: null }
     }
     async createOffer() {
       return { type: 'offer', sdp: 'mock-offer' }
@@ -205,7 +217,23 @@ test('أندرويد: غياب WebRTC — مخرج مباشر لـ ctx.destinati
   delete global.navigator.userAgent
 })
 
+test('أندرويد: اختبار النغمة يمر عبر وجهة المراقبة (نفس مسار المايك)', async () => {
+  const { log } = makeMocks()
+  installRtcMock(log)
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  await Router.start()
+  // النغمة تمر عبر monitorDest — وهو موصول بالـ WebRTC loopback
+  const ok = Router.playTestTone(0.1)
+  assert.equal(ok, true, 'النغمة أُرسلت')
+  assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'المسار: loopback')
+  assert.equal(Router.diagnose().rtcState, 'connecting', 'حالة الاتصال تظهر في التشخيص')
+  delete global.navigator.userAgent
+  uninstallRtcMock()
+})
+
 test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال (حماية من الصمت الأبدي)', async () => {
+  uninstallRtcMock() // ضمان حالة نظيفة — لا WebRTC في هذا الاختبار
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
