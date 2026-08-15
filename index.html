@@ -589,7 +589,7 @@
         monitorDest: null, // أندرويد: وجهة مراقبة → عنصر صوتي (مسار الوسائط)
         _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorDest.stream
 
-        current: { delay: 0, feedback: 0, hpf: 20, gain: 1 },
+        current: { delay: 0, feedback: 0, hpf: 20, gain: 1, micMode: 'raw' },
 
         /* ── التسجيل ── */
         isRecording: false,
@@ -614,16 +614,73 @@
 
         /* إعدادات الميكروفون حسب المنصة:
            - iOS/سطح المكتب: false/false/false — إشارة خام نظيفة (مؤكد يعمل).
-           - Android: الافتراضيات (معالجة مدمجة). طلب المعالجة الخام
-             (كلها false) يدفع مسار الصوت لوضع «الاتصال» عند كثير من
-             الأجهزة فيُكتم المخرج أو يُوجَّه لسماعة الأذن — المشكلة
-             الكلاسيكية الموثقة في Chrome للجوال. مع الافتراضيات يعمل
-             المخرج بشكل طبيعي ويلغي المتصفح الصدى من الميكروفون. */
+           - Android: جرّب «الخام» أولاً (بدون معالجة) لأنه يبقي النظام في
+             وضع «الوسائط» فيخرج الصوت من السماعة الخارجية بدل وضع
+             «الاتصال» (سماعة الأذن). إن كان الإدخال صامتاً، المراقب
+             التلقائي يبدّل إلى الافتراضيات (معالجة مدمجة). */
         _buildMicConstraints() {
           if (this._isAndroid()) {
-            return { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
+            return this.current.micMode === 'raw'
+              ? { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
+              : { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
           }
           return { audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }
+        },
+
+        /* 🔉 فرض سماعة «الوسائط» على أندرويد:
+           - AudioContext.setSinkId('') — مدعوم على أندرويد كروم 110+ (أكده
+             توافق MDN: chrome_android: 110). يوجّه الإخراج للجهاز الافتراضي
+             (السماعة الخارجية) بدل سماعة الأذن.
+           - HTMLMediaElement.setSinkId غير مدعوم على أندرويد — نتحقق ونستمر.
+           كل المحاولات داخل try/catch — أي فشل لا يكسر الجلسة. */
+        async _forceMediaSink() {
+          const results = { ctxSink: 'unsupported', audioSink: 'unsupported' }
+          try {
+            if (this.ctx && typeof this.ctx.setSinkId === 'function') {
+              await this.ctx.setSinkId('') // '' = الجهاز الافتراضي
+              results.ctxSink = 'ok'
+            }
+          } catch {
+            results.ctxSink = 'error'
+          }
+          try {
+            if (this._monitorAudio && typeof this._monitorAudio.setSinkId === 'function') {
+              await this._monitorAudio.setSinkId('')
+              results.audioSink = 'ok'
+            }
+          } catch {
+            results.audioSink = 'error'
+          }
+          this._sinkResults = results
+          return results
+        },
+
+        /* ⏳ مراقب الإدخال (أندرويد فقط): إن كان الإدخال صامتاً تماماً بعد
+           1.5 ثانية، نعيد المحاولة بالإعدادات الأخرى (خام ↔ افتراضيات).
+           يمنع «صمت الأبد» إذا رفض الجهاز الوضع الخام. */
+        _armInputWatchdog() {
+          if (this._watchdogFired || !this._isAndroid()) return
+          this._watchdogFired = true
+          const check = () => {
+            const an = this.analyser
+            if (!an || !this.stream || !this.ctx || this.ctx.state !== 'running') return
+            const buf = new Uint8Array(an.fftSize || 2048)
+            try {
+              an.getByteTimeDomainData(buf)
+            } catch {
+              return
+            }
+            let peak = 0
+            for (let i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i] - 128))
+            if (peak > 1) return // فيه إشارة — تمام
+            // صامت — جرّب الوضع الآخر (جولة واحدة فقط: _watchdogFired يبقى
+            // true فلا يُسلَّح المراقب مجدداً بعد إعادة التشغيل)
+            const prev = this.current.micMode
+            this.current.micMode = prev === 'raw' ? 'defaults' : 'raw'
+            this.stop(true) // بدون حفظ تسجيل
+            this.start().catch(() => {})
+          }
+          setTimeout(check, 1500)
         },
 
         /* تشخيص سريع — يُظهر حالة المحرك للتحقق على الجهاز الحقيقي */
@@ -634,6 +691,8 @@
             gain: this.masterGain ? this.masterGain.gain.value : null,
             micActive: !!(this.stream && this.stream.active !== false),
             outputPath: this.monitorDest ? 'audio-element' : 'ctx.destination',
+            micMode: this.current ? this.current.micMode : null,
+            sink: this._sinkResults || null,
             dryPathToSpeakers: !!(
               this.masterGain &&
               this.masterGain.connects &&
@@ -665,6 +724,16 @@
 
           /* 1) استئناف فوراً ضمن إيماءة الضغط — قبل طلب الميكروفون البطيء */
           await this._resumeCtx()
+
+          /* 1.5) 🔑 أندرويد: افتح جلسة «الوسائط» قبل طلب المايك.
+             اقتراح Google Issue 443255997: لو كان التشغيل ناشطاً وقت
+             getUserMedia يبقى النظام على حجم/مسار الوسائط (السماعة
+             الخارجية) بدل وضع الاتصال (سماعة الأذن). عنصر صوتي يبدأ
+             بالتشغيل فوراً (صامت — لا شيء موصول بعد). */
+          if (this._isAndroid()) {
+            this.monitorDest = this.ctx.createMediaStreamDestination()
+            this._ensureMonitorAudio()
+          }
 
           /* إذن الميكروفون — أي رفض يظهر رسالة ودية فوراً
              (الإعدادات حسب المنصة: انظر _buildMicConstraints) */
@@ -728,10 +797,12 @@
           this.masterGain.connect(this.recDest) // تسجيل: جاف
           this.delay.connect(this.recDest) // رطب → تسجيل
           if (this._isAndroid()) {
-            this.monitorDest = this.ctx.createMediaStreamDestination()
             this.masterGain.connect(this.monitorDest) // جاف → المراقبة
             this.delay.connect(this.monitorDest) // رطب → المراقبة
             this._ensureMonitorAudio()
+            /* 🔉 فرض سماعة الوسائط + مراقب الإدخال الصامت */
+            await this._forceMediaSink()
+            this._armInputWatchdog()
           } else {
             this.masterGain.connect(this.ctx.destination) // متصل دائماً
             this.delay.connect(this.ctx.destination) // رطب → سماعات
@@ -761,8 +832,8 @@
           }
         },
 
-        stop() {
-          this.stopRecorder() // إن كان التسجيل جارياً: يُوقَف ويُحفظ
+        stop(silent) {
+          if (!silent) this.stopRecorder() // إن كان التسجيل جارياً: يُوقَف ويُحفظ
           if (this.stream) this.stream.getTracks().forEach((tr) => tr.stop())
           if (this.source) this.source.disconnect()
           if (this.hpf) this.hpf.disconnect()
@@ -1003,9 +1074,14 @@
             ctx2d.globalAlpha = 1
             const level = Math.round((sum / bars) * 100)
             const d = Router.diagnose()
+            const sinkTxt = d.sink
+              ? (d.sink.ctxSink === 'ok' || d.sink.audioSink === 'ok' ? 'sink:ok' : 'sink:na')
+              : ''
             diagEl.textContent =
               `ctx:${d.ctxState} · in:${level}% · out:${d.outputPath}` +
-              (Router._monitorAudio ? ' · audio-playing' : '')
+              (Router._monitorAudio ? ' · audio-playing' : '') +
+              (d.micMode ? ` · mode:${d.micMode}` : '') +
+              (sinkTxt ? ` · ${sinkTxt}` : '')
           }
           visRaf = requestAnimationFrame(draw)
         }

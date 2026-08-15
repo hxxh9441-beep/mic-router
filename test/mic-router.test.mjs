@@ -15,7 +15,7 @@ engineCode = engineCode.replace(/^[^\n]*\*\//, '').replace(/\/\* ===== $/, '')
 
 /* ── محاكاة Web Audio ─────────────────────────── */
 function makeMocks() {
-  const log = { constraints: null, latencyHint: null, tracksStopped: 0, disconnected: [] }
+  const log = { constraints: null, latencyHint: null, tracksStopped: 0, disconnected: [], order: [], sinkId: null }
 
   function makeNode(type) {
     return {
@@ -40,12 +40,20 @@ function makeMocks() {
     currentTime: 0,
     destination: makeNode('destination'),
     async resume() { this.state = 'running' },
+    async setSinkId(id) { log.sinkId = id; this.state = 'running' },
     createBiquadFilter: () => makeNode('biquad'),
     createGain: () => makeNode('gain'),
-    createAnalyser: () => makeNode('analyser'),
+    createAnalyser: () => {
+      const n = makeNode('analyser')
+      n.fftSize = 1024
+      n.frequencyBinCount = 512
+      n.getByteTimeDomainData = (buf) => { buf.fill(128) } // صمت تام
+      n.getByteFrequencyData = (buf) => { buf.fill(0) }
+      return n
+    },
     createDelay(max) { const n = makeNode('delay'); n.max = max; return n },
     createMediaStreamSource(stream) { const n = makeNode('source'); n.stream = stream; return n },
-    createMediaStreamDestination() { const n = makeNode('recDest'); n.stream = { getTracks: () => [] }; return n },
+    createMediaStreamDestination() { const n = makeNode('recDest'); n.stream = { getTracks: () => [] }; log.order.push('dest'); return n },
   }
 
   global.window = {
@@ -56,7 +64,8 @@ function makeMocks() {
       mediaDevices: {
         getUserMedia: async (constraints) => {
           log.constraints = constraints
-          return { getTracks: () => [{ stop() { log.tracksStopped++ } }] }
+          log.order.push('gum')
+          return { active: true, getTracks: () => [{ stop() { log.tracksStopped++ } }] }
         },
       },
     },
@@ -113,18 +122,38 @@ test('المحرك: إعدادات الميكروفون تعطّل المعال�
   assert.equal(log.constraints.audio.autoGainControl, false)
 })
 
-test('أندرويد: إعدادات الميكروفون تستخدم الافتراضيات + مخرج عبر عنصر صوتي (مسار الوسائط)', async () => {
+test('أندرويد: وضع خام أولاً (مسار الوسائط) + جلسة وسائط قبل طلب المايك + مخرج عبر عنصر صوتي', async () => {
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
-  assert.equal(log.constraints.audio.echoCancellation, true, 'AEC مفعل — مسار الوسائط لا وضع الاتصال')
-  assert.equal(log.constraints.audio.noiseSuppression, true)
-  assert.equal(log.constraints.audio.autoGainControl, true)
+  // وضع «الخام» أولاً — يبقي النظام على مسار الوسائط (السماعة الخارجية)
+  assert.equal(log.constraints.audio.echoCancellation, false, 'الخام أولاً — مسار الوسائط لا وضع الاتصال')
+  assert.equal(log.constraints.audio.noiseSuppression, false)
+  assert.equal(log.constraints.audio.autoGainControl, false)
+  // جلسة الوسائط (وجهة المراقبة) أُنشئت قبل طلب المايك — اقتراح Google 443255997
+  assert.ok(log.order.indexOf('dest') < log.order.indexOf('gum'), 'وجهة المراقبة تسبق getUserMedia')
   // المخرج عبر monitorDest (عنصر صوتي) وليس ctx.destination
   assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
   assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
   assert.ok(!Router.masterGain.connects.includes(ctx.destination), 'لا اتصال بـ ctx.destination على أندرويد')
+  // فرض السماعة: setSinkId على السياق (مدعوم أندرويد كروم 110+)
+  assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت')
+  assert.equal(Router.diagnose().sink.ctxSink, 'ok', 'نتيجة فرض السماعة مسجلة')
+  delete global.navigator.userAgent
+})
+
+test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال (حماية من الصمت الأبدي)', async () => {
+  const { log } = makeMocks()
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  await Router.start()
+  assert.equal(Router.current.micMode, 'raw', 'بدأ بالوضع الخام')
+  assert.equal(Router._watchdogFired, true, 'المراقب مسلّح')
+  // المحاكاة تُرجع صمتاً تاماً (fill(128)) — المراقب بعد 1.5s يبدّل
+  await new Promise((r) => setTimeout(r, 1700))
+  assert.equal(Router.current.micMode, 'defaults', 'بدّل للافتراضيات بعد الصمت')
+  assert.equal(log.constraints.audio.echoCancellation, true, 'إعادة المحاولة بالافتراضيات (معالجة مدمجة)')
   delete global.navigator.userAgent
 })
 
