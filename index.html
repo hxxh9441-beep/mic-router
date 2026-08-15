@@ -386,7 +386,12 @@
               </button>
             </div>
             <p class="mt-1 text-xs text-slate-500">فرض السماعة (setSinkId) معطّل افتراضياً — هو المشتبه في صمت 5a59096. فعّله وجرّب.</p>
-            <div class="mt-3 rounded-xl border border-slate-500/30 bg-slate-500/10 px-4 py-3">
+          </div>
+
+          <!-- 🔊 اختبار السماعة المستقل — ظاهر دائماً على أندرويد، يعمل بدون مايك
+               (الحسم النهائي: هل السماعة تُخرج صوتاً إطلاقاً في هذا المتصفح؟) -->
+          <div id="speakerRow" class="mt-3 hidden">
+            <div class="rounded-xl border border-slate-500/30 bg-slate-500/10 px-4 py-3">
               <button
                 id="speakerTestBtn"
                 class="w-full rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-white/20 active:scale-95"
@@ -394,7 +399,7 @@
                 🔊 اختبار السماعة (بدون مايك)
               </button>
               <p class="mt-1.5 text-xs text-slate-400">
-                الحسم النهائي: يرسل 3 نغمات <b>مباشرة للسماعة بلا مايك إطلاقاً</b>. سمعتها؟ السماعة سليمة والمشكلة في وضع الاتصال. ما سمعتها؟ السماعة/الصوت نفسه مكتوم.
+                الحسم النهائي: يرسل 3 نغمات <b>مباشرة للسماعة بلا مايك إطلاقاً</b>. <b>لا تشغّل المايك قبلها</b> — افتح الصفحة واضغطها فوراً. سمعتها؟ السماعة سليمة والمشكلة في وضع الاتصال. ما سمعتها؟ السماعة/الصوت نفسه مكتوم.
               </p>
             </div>
           </div>
@@ -1679,6 +1684,10 @@
           })
         })
       }
+
+      /* 🔊 اختبار السماعة المستقل — ظاهر فوراً على أندرويد (بدون تشغيل المايك:
+         الاختبار النظيف الوحيد — مع المايك يكون وضع الاتصال مفعّلاً والنتيجة ملوّثة) */
+      $('speakerRow').classList.toggle('hidden', !/Android/i.test(navigator.userAgent || ''))
     </script>
   </body>
 </html>
