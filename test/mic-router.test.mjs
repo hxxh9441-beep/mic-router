@@ -191,16 +191,19 @@ test('أندرويد: WebRTC loopback أولاً — مسار «المكالمة
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
-  // وضع «الخام» أولاً — إعدادات الميكروفون
-  assert.equal(log.constraints.audio.echoCancellation, false, 'الخام أولاً')
-  assert.equal(log.constraints.audio.noiseSuppression, false)
-  assert.equal(log.constraints.audio.autoGainControl, false)
+  // الافتراضيات أولاً (true×3) — الدليل الحي: تعطي صوتاً فعلياً على أندرويد
+  assert.equal(log.constraints.audio.echoCancellation, true, 'الافتراضيات أولاً — تعطي صوتاً (مثبت حياً)')
+  assert.equal(log.constraints.audio.noiseSuppression, true)
+  assert.equal(log.constraints.audio.autoGainControl, true)
+  assert.equal(Router.current.micMode, 'defaults', 'بدأ بالافتراضيات')
   // loopback: متصلان محليان + وجهة مراقبة
   assert.equal(log.pcCreated, 2, 'متصلان RTCPeerConnection محليان')
   assert.ok(Router._loopback, 'الـ loopback مفعّل')
   assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'مسار الإخراج: WebRTC loopback')
   assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
   assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
+  // المسار المباشر (المضمون) مفعّل أيضاً بالتوازي
+  assert.ok(Router._monitorAudio, 'المسار المباشر يعمل بالتوازي')
   // فرض السماعة: setSinkId على السياق (مدعوم أندرويد كروم 110+)
   assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت')
   assert.equal(Router.diagnose().sink.ctxSink, 'ok', 'نتيجة فرض السماعة مسجلة')
@@ -261,18 +264,18 @@ test('أندرويد: تبادل ICE candidates — الاتصال لا يعلق
   uninstallRtcMock()
 })
 
-test('أندرويد: المراقب يبدّل للافتراضيات عند صمت الإدخال (حماية من الصمت الأبدي)', async () => {
+test('أندرويد: المراقب يبدّل للخام عند صمت الإدخال (حماية من الصمت الأبدي)', async () => {
   uninstallRtcMock() // ضمان حالة نظيفة — لا WebRTC في هذا الاختبار
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
-  assert.equal(Router.current.micMode, 'raw', 'بدأ بالوضع الخام')
+  assert.equal(Router.current.micMode, 'defaults', 'بدأ بالافتراضيات')
   assert.equal(Router._watchdogFired, true, 'المراقب مسلّح')
   // المحاكاة تُرجع صمتاً تاماً (fill(128)) — المراقب بعد 1.5s يبدّل
   await new Promise((r) => setTimeout(r, 1700))
-  assert.equal(Router.current.micMode, 'defaults', 'بدّل للافتراضيات بعد الصمت')
-  assert.equal(log.constraints.audio.echoCancellation, true, 'إعادة المحاولة بالافتراضيات (معالجة مدمجة)')
+  assert.equal(Router.current.micMode, 'raw', 'بدّل للخام بعد الصمت')
+  assert.equal(log.constraints.audio.echoCancellation, false, 'إعادة المحاولة بالخام (بدون معالجة)')
   // في بيئة الاختبار (لا WebRTC): المخرج يبقى المباشر
   assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'fallback: مخرج مباشر')
   delete global.navigator.userAgent

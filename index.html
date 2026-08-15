@@ -359,6 +359,15 @@
               🔔 اختبار نغمة (440Hz)
             </button>
             <p class="mt-1 text-xs text-slate-500">تسمعها؟ المسار سليم — المشكلة في المايك. ما تسمعها؟ مسار الإخراج مكتوم.</p>
+            <div class="mt-2 flex items-center justify-center gap-2">
+              <button
+                id="modeBtn"
+                class="rounded-xl border border-purple-400/30 bg-purple-500/10 px-4 py-2 text-sm font-semibold text-purple-300 transition hover:bg-purple-500/20 active:scale-95"
+              >
+                🔄 وضع المايك: افتراضيات
+              </button>
+            </div>
+            <p class="mt-1 text-xs text-slate-500">الافتراضيات (true) تعطي صوتاً — الخام (false) قد يُكتم. بدّل وجرّب.</p>
           </div>
           <p id="recBadge" class="mt-2 hidden items-center gap-2 text-sm font-semibold text-red-400">
             <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500 rec-blink"></span>
@@ -600,7 +609,7 @@
         monitorDest: null, // أندرويد: وجهة مراقبة → عنصر صوتي (مسار الوسائط)
         _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorDest.stream
 
-        current: { delay: 0, feedback: 0, hpf: 20, gain: 1, micMode: 'raw' },
+        current: { delay: 0, feedback: 0, hpf: 20, gain: 1, micMode: 'defaults' },
 
         /* ── التسجيل ── */
         isRecording: false,
@@ -625,10 +634,11 @@
 
         /* إعدادات الميكروفون حسب المنصة:
            - iOS/سطح المكتب: false/false/false — إشارة خام نظيفة (مؤكد يعمل).
-           - Android: جرّب «الخام» أولاً (بدون معالجة) لأنه يبقي النظام في
-             وضع «الوسائط» فيخرج الصوت من السماعة الخارجية بدل وضع
-             «الاتصال» (سماعة الأذن). إن كان الإدخال صامتاً، المراقب
-             التلقائي يبدّل إلى الافتراضيات (معالجة مدمجة). */
+           - Android: الافتراضيات أولاً (true×3) — الدليل الحي من جهاز
+             المستخدم: الافتراضيات تعطي صوتاً فعلياً (سماعة الأذن على
+             الأقل) بينما الخام (false×3) يُكتم المخرج عند كثير من
+             الأجهزة (المشكلة الكلاسيكية الموثقة في Chrome للجوال).
+             زر التبديل في الواجهة يسمح بتجربة الخام يدوياً. */
         _buildMicConstraints() {
           if (this._isAndroid()) {
             return this.current.micMode === 'raw'
@@ -1367,6 +1377,32 @@
         if (!ok) {
           $('toneBtn').textContent = '⚠️ شغّل المايك أولاً'
           setTimeout(() => { $('toneBtn').textContent = '🔔 اختبار نغمة (440Hz)' }, 1500)
+        }
+      })
+
+      /* ── 🔄 تبديل وضع المايك (افتراضيات ↔ خام) — يعيد التشغيل فوراً ── */
+      $('modeBtn').addEventListener('click', async () => {
+        const wasOn = state.micOn
+        const wasRec = state.recordingEnabled
+        if (wasOn) {
+          Router.stop(true) // بدون حفظ — نبدّل ونعيد فوراً
+          stopTimer()
+        }
+        Router.current.micMode = Router.current.micMode === 'raw' ? 'defaults' : 'raw'
+        const label = Router.current.micMode === 'raw' ? 'خام' : 'افتراضيات'
+        $('modeBtn').textContent = '🔄 وضع المايك: ' + label
+        if (wasOn) {
+          try {
+            await Router.start()
+            startVisualizer()
+            if (wasRec) {
+              Router.startRecorder()
+              startTimer()
+            }
+          } catch {
+            state.micOn = false
+            stopVisualizer()
+          }
         }
       })
 
