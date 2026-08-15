@@ -759,6 +759,13 @@
             this.monitorDest = this.ctx.createMediaStreamDestination()
             this.masterGain.connect(this.monitorDest)
             this.delay.connect(this.monitorDest)
+
+            /* 🎯 المسار المباشر (مضمون): عنصر صوتي من monitorDest مباشرة —
+               كان يعطي صوتاً فعلياً على أندرويد (من سماعة الأذن على الأقل).
+               نبقيه بالتوازي مع WebRTC حتى لا نخسر الصوت أبداً. */
+            this._ensureMonitorAudio()
+            this.retryMonitorPlay()
+
             // addTransceiver بدل addTrack: تحكم أدق + يمنع استقبال pc1
             // (نرسل فقط) — بعض أجهزة أندرويد تكتم الـ addTrack الصامت
             this.monitorDest.stream.getTracks().forEach((t) => {
@@ -810,14 +817,7 @@
               document.body.appendChild(a)
               const p = a.play()
               if (p && p.catch) p.catch(() => {})
-              this._monitorAudio = a
-              // تتبع حالة التشغيل الفعلية — هل play() نجح أم رُفض بصمت؟
-              this._audioPlayState = 'started'
-              if (p && p.then) {
-                p.then(() => { this._audioPlayState = 'playing' }).catch(() => {
-                  this._audioPlayState = 'blocked' // autoplay policy رفضت
-                })
-              }
+              this._rtcAudio = a // عنصر WebRTC — منفصل عن المباشر
             }
 
             // تبادل offer/answer محلي (نفس المتصفح — بلا شبكة)
@@ -865,23 +865,24 @@
           }
         },
 
-        /* ▶️ إعادة تشغيل عنصر الصوت داخل إيماءة المستخدم:
+        /* ▶️ إعادة تشغيل عناصر الصوت داخل إيماءة المستخدم:
            autoplay policy على أندرويد قد ترفض play() الأول (خارج الإيماءة) —
            أي نقرة/لمسة تعيد المحاولة، وبما أننا الآن داخل إيماءة مستخدم
-           يقبل المتصفح التشغيل. */
+           يقبل المتصفح التشغيل. يشغّل المسارين (المباشر + WebRTC). */
         retryMonitorPlay() {
-          const a = this._monitorAudio
-          if (!a) return
-          try {
-            const p = a.play()
-            if (p && p.then) {
-              p.then(() => { this._audioPlayState = 'playing' }).catch(() => {
-                this._audioPlayState = 'blocked'
-              })
+          ;[this._monitorAudio, this._rtcAudio].forEach((a) => {
+            if (!a) return
+            try {
+              const p = a.play()
+              if (p && p.then) {
+                p.then(() => { this._audioPlayState = 'playing' }).catch(() => {
+                  this._audioPlayState = 'blocked'
+                })
+              }
+            } catch {
+              /* تجاهل */
             }
-          } catch {
-            /* تجاهل */
-          }
+          })
         },
 
         _teardownLoopback() {
@@ -988,7 +989,9 @@
           await this._resumeCtx()
         },
 
-        /* عنصر صوتي خفي يشغّل وجهة المراقبة (مسار الوسائط على أندرويد) */
+        /* عنصر صوتي خفي يشغّل وجهة المراقبة مباشرة (المسار المضمون —
+           كان يعطي صوتاً فعلياً على أندرويد من سماعة الأذن على الأقل).
+           منفصل تماماً عن عنصر WebRTC (_rtcAudio) حتى لا يتعارضا. */
         _ensureMonitorAudio() {
           if (this._monitorAudio || !this.monitorDest) return
           if (typeof document === 'undefined') return // بيئة الاختبار
@@ -998,11 +1001,19 @@
             a.autoplay = true
             a.playsInline = true
             a.setAttribute('playsinline', '')
+            a.volume = 1
+            a.muted = false
             a.style.display = 'none'
             document.body.appendChild(a)
             const p = a.play()
             if (p && p.catch) p.catch(() => {})
             this._monitorAudio = a
+            this._audioPlayState = 'started'
+            if (p && p.then) {
+              p.then(() => { this._audioPlayState = 'playing' }).catch(() => {
+                this._audioPlayState = 'blocked'
+              })
+            }
           } catch {
             /* تعذّر إنشاء عنصر الصوت — سيحاول عند الجلسة القادمة */
           }
@@ -1021,16 +1032,18 @@
           if (this.analyser) this.analyser.disconnect()
           if (this.monitorDest) this.monitorDest.disconnect()
           this._teardownLoopback() // إغلاق RTCPeerConnection المحلي إن وُجد
-          if (this._monitorAudio && typeof document !== 'undefined') {
-            try {
-              this._monitorAudio.srcObject = null
-              this._monitorAudio.remove()
-            } catch {
-              /* تجاهل */
+          ;[this._monitorAudio, this._rtcAudio].forEach((a) => {
+            if (a && typeof document !== 'undefined') {
+              try {
+                a.srcObject = null
+                a.remove()
+              } catch {
+                /* تجاهل */
+              }
             }
-          }
+          })
           this.source = this.hpf = this.masterGain = this.wetGain = this.delay = this.feedbackGain = this.recDest = null
-          this.analyser = this.monitorDest = this._monitorAudio = null
+          this.analyser = this.monitorDest = this._monitorAudio = this._rtcAudio = null
           this.stream = null
         },
 
