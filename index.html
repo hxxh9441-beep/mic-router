@@ -368,6 +368,15 @@
               </button>
             </div>
             <p class="mt-1 text-xs text-slate-500">الافتراضيات (true) تعطي صوتاً — الخام (false) قد يُكتم. بدّل وجرّب.</p>
+            <div class="mt-2 flex items-center justify-center gap-2">
+              <button
+                id="routeBtn"
+                class="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-300 transition hover:bg-emerald-500/20 active:scale-95"
+              >
+                🎚️ المخرج: مباشر
+              </button>
+            </div>
+            <p class="mt-1 text-xs text-slate-500">مباشر = يعطي صوتاً (سماعة أذن) · WebRTC = يحاول السماعة الخارجية · تلقائي = الاثنان</p>
           </div>
           <p id="recBadge" class="mt-2 hidden items-center gap-2 text-sm font-semibold text-red-400">
             <span class="inline-block h-2.5 w-2.5 rounded-full bg-red-500 rec-blink"></span>
@@ -608,6 +617,8 @@
         analyser: null, // فيجوالايزر — يقرأ إشارة الميكروفون (وليس المخرج)
         monitorDest: null, // أندرويد: وجهة مراقبة → عنصر صوتي (مسار الوسائط)
         _monitorAudio: null, // عنصر <audio> خفي يشغّل monitorDest.stream
+        _rtcAudio: null, // عنصر WebRTC (مسار تجريبي)
+        outputRoute: 'direct', // أندرويد: direct | webrtc | both (افتراضياً المباشر — المثبت أنه يعطي صوتاً)
 
         current: { delay: 0, feedback: 0, hpf: 20, gain: 1, micMode: 'defaults' },
 
@@ -743,20 +754,16 @@
           }
         },
 
-        /* 🔊 مسار WebRTC loopback لأندرويد:
-           المشكلة الجذرية (مؤكدة من كود Chromium AudioManagerAndroid.java):
-           getUserMedia يستدعي setCommunicationAudioModeOn(true) → يفرض
-           MODE_IN_COMMUNICATION على مستوى النظام — فكل مخرجات WebAudio
-           (ctx.destination أو عنصر <audio>) تُوجَّه لسماعة الأذن أو تُكتم.
-
-           الحل: تشغيل الصوت عبر RTCPeerConnection محلي (loopback) —
-           مسار WebRTC يخرج من السماعة الخارجية على أندرويد (كما في
-           مكالمات Meet). بلا خوادم ICE: تبادل offer/answer بين
-           متصلين محليين فقط. */
-        async _setupLoopback() {
+        /* 🔊 مسار WebRTC loopback لأندرويد (تجريبي — اختياري):
+           يمرر الصوت عبر RTCPeerConnection محلي — بعض الأجهزة يخرج منها
+           الصوت من السماعة الخارجية (مثل Meet)، لكن على أجهزة أخرى يكمت
+           حتى المسار المباشر، لذا لا يُفعَّل إلا يدوياً (outputRoute).
+           بلا خوادم ICE: تبادل offer/answer بين متصلين محليين فقط. */
+        async _setupLoopbackWebRTC() {
           if (
             typeof RTCPeerConnection === 'undefined' ||
-            typeof document === 'undefined'
+            typeof document === 'undefined' ||
+            !this.monitorDest
           ) {
             return false // غير مدعوم → المخرج المباشر (fallback)
           }
@@ -764,17 +771,6 @@
             const pc1 = new RTCPeerConnection()
             const pc2 = new RTCPeerConnection()
             this._loopback = { pc1, pc2 }
-
-            // وجهة مراقبة → WebRTC (مسار «المكالمة» الخارجي)
-            this.monitorDest = this.ctx.createMediaStreamDestination()
-            this.masterGain.connect(this.monitorDest)
-            this.delay.connect(this.monitorDest)
-
-            /* 🎯 المسار المباشر (مضمون): عنصر صوتي من monitorDest مباشرة —
-               كان يعطي صوتاً فعلياً على أندرويد (من سماعة الأذن على الأقل).
-               نبقيه بالتوازي مع WebRTC حتى لا نخسر الصوت أبداً. */
-            this._ensureMonitorAudio()
-            this.retryMonitorPlay()
 
             // addTransceiver بدل addTrack: تحكم أدق + يمنع استقبال pc1
             // (نرسل فقط) — بعض أجهزة أندرويد تكتم الـ addTrack الصامت
@@ -971,18 +967,22 @@
 
           /* ── الإخراج حسب المنصة ──
              iOS/سطح المكتب: ctx.destination مباشرة (مؤكد العمل).
-             أندرويد:
-               • WebRTC loopback (الأساس): مسار «المكالمة» الخارجي — يخرج
-                 من السماعة الخارجية (مثل Meet). بلا خوادم، محلي بالكامل.
-               • إن فشل الـ loopback: مخرج مباشر لـ ctx.destination. */
+             أندرويد: المسار المباشر افتراضياً (عنصر صوتي من monitorDest —
+             المثبت حياً أنه يعطي صوتاً من سماعة الأذن). WebRTC loopback
+             تجريبي (outputRoute: webrtc/both) — لكنه يكمت المباشر على
+             بعض الأجهزة فلا يُفعَّل إلا يدوياً. */
           this.masterGain.connect(this.recDest) // تسجيل: جاف
           this.delay.connect(this.recDest) // رطب → تسجيل
           if (this._isAndroid()) {
-            const ok = await this._setupLoopback()
-            if (!ok) {
-              // fallback: المخرج المباشر
-              this.masterGain.connect(this.ctx.destination)
-              this.delay.connect(this.ctx.destination)
+            // المسار المباشر دائماً (المضمون)
+            this.monitorDest = this.ctx.createMediaStreamDestination()
+            this.masterGain.connect(this.monitorDest)
+            this.delay.connect(this.monitorDest)
+            this._ensureMonitorAudio()
+            // WebRTC loopback — اختياري (webrtc أو both)
+            if (this.outputRoute === 'webrtc' || this.outputRoute === 'both') {
+              const ok = await this._setupLoopbackWebRTC()
+              if (!ok) this._teardownLoopback()
             }
           } else {
             this.masterGain.connect(this.ctx.destination) // متصل دائماً
@@ -1392,6 +1392,31 @@
         const label = Router.current.micMode === 'raw' ? 'خام' : 'افتراضيات'
         $('modeBtn').textContent = '🔄 وضع المايك: ' + label
         if (wasOn) {
+          try {
+            await Router.start()
+            startVisualizer()
+            if (wasRec) {
+              Router.startRecorder()
+              startTimer()
+            }
+          } catch {
+            state.micOn = false
+            stopVisualizer()
+          }
+        }
+      })
+
+      /* ── 🎚️ تبديل مسار الإخراج (مباشر ↔ WebRTC ↔ تلقائي) — يعيد التشغيل ── */
+      $('routeBtn').addEventListener('click', async () => {
+        const wasOn = state.micOn
+        const wasRec = state.recordingEnabled
+        const order = ['direct', 'webrtc', 'both']
+        const labels = { direct: 'مباشر', webrtc: 'WebRTC', both: 'تلقائي' }
+        Router.outputRoute = order[(order.indexOf(Router.outputRoute) + 1) % order.length]
+        $('routeBtn').textContent = '🎚️ المخرج: ' + labels[Router.outputRoute]
+        if (wasOn) {
+          Router.stop(true)
+          stopTimer()
           try {
             await Router.start()
             startVisualizer()

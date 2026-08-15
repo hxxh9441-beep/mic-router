@@ -185,7 +185,7 @@ test('المحرك: إعدادات الميكروفون تعطّل المعال�
   assert.equal(log.constraints.audio.autoGainControl, false)
 })
 
-test('أندرويد: WebRTC loopback أولاً — مسار «المكالمة» الخارجي (مثل Meet)', async () => {
+test('أندرويد: المسار المباشر افتراضياً (المثبت أنه يعطي صوتاً) — WebRTC اختياري', async () => {
   const { log, ctx } = makeMocks()
   installRtcMock(log)
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
@@ -196,14 +196,13 @@ test('أندرويد: WebRTC loopback أولاً — مسار «المكالمة
   assert.equal(log.constraints.audio.noiseSuppression, true)
   assert.equal(log.constraints.audio.autoGainControl, true)
   assert.equal(Router.current.micMode, 'defaults', 'بدأ بالافتراضيات')
-  // loopback: متصلان محليان + وجهة مراقبة
-  assert.equal(log.pcCreated, 2, 'متصلان RTCPeerConnection محليان')
-  assert.ok(Router._loopback, 'الـ loopback مفعّل')
-  assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'مسار الإخراج: WebRTC loopback')
+  // المسار المباشر هو الافتراضي — لا WebRTC إلا بطلب صريح
+  assert.equal(Router.outputRoute, 'direct', 'المسار الافتراضي: مباشر')
+  assert.equal(Router.diagnose().outputPath, 'audio-element', 'مسار الإخراج: عنصر صوتي مباشر')
   assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
   assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
-  // المسار المباشر (المضمون) مفعّل أيضاً بالتوازي
-  assert.ok(Router._monitorAudio, 'المسار المباشر يعمل بالتوازي')
+  assert.ok(Router._monitorAudio, 'المسار المباشر يعمل')
+  assert.ok(!Router._loopback, 'لا WebRTC افتراضياً')
   // فرض السماعة: setSinkId على السياق (مدعوم أندرويد كروم 110+)
   assert.equal(log.sinkId, '', 'ctx.setSinkId("") استُدعيت')
   assert.equal(Router.diagnose().sink.ctxSink, 'ok', 'نتيجة فرض السماعة مسجلة')
@@ -211,15 +210,33 @@ test('أندرويد: WebRTC loopback أولاً — مسار «المكالمة
   uninstallRtcMock()
 })
 
-test('أندرويد: غياب WebRTC — مخرج مباشر لـ ctx.destination (fallback)', async () => {
+test('أندرويد: WebRTC loopback يُفعَّل عند طلبه (outputRoute: webrtc)', async () => {
+  const { log } = makeMocks()
+  installRtcMock(log)
+  global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
+  const Router = loadRouter()
+  Router.outputRoute = 'webrtc'
+  await Router.start()
+  // loopback: متصلان محليان + المسار المباشر بالتوازي
+  assert.equal(log.pcCreated, 2, 'متصلان RTCPeerConnection محليان')
+  assert.ok(Router._loopback, 'الـ loopback مفعّل')
+  assert.equal(Router.diagnose().outputPath, 'webrtc-loopback', 'مسار الإخراج: WebRTC loopback')
+  assert.ok(Router._monitorAudio, 'المسار المباشر ما زال يعمل بالتوازي')
+  delete global.navigator.userAgent
+  uninstallRtcMock()
+})
+
+test('أندرويد: المسار المباشر يعمل حتى بدون WebRTC (عنصر صوتي — المضمون)', async () => {
   const { log, ctx } = makeMocks()
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
   await Router.start()
-  // لا RTCPeerConnection → fallback للمخرج المباشر
+  // لا RTCPeerConnection → المسار المباشر (عنصر صوتي) يبقى شغالاً
   assert.ok(!Router._loopback, 'لا loopback')
-  assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'مسار الإخراج المباشر')
-  assert.ok(Router.masterGain.connects.includes(ctx.destination), 'الجاف → ctx.destination')
+  assert.equal(Router.diagnose().outputPath, 'audio-element', 'مسار الإخراج: عنصر صوتي مباشر')
+  assert.ok(Router.monitorDest, 'وجهة مراقبة أُنشئت')
+  assert.ok(Router._monitorAudio, 'عنصر الصوت المباشر يعمل')
+  assert.ok(Router.masterGain.connects.includes(Router.monitorDest), 'الجاف → المراقبة')
   delete global.navigator.userAgent
 })
 
@@ -228,6 +245,7 @@ test('أندرويد: اختبار النغمة يمر عبر وجهة المر�
   installRtcMock(log)
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
+  Router.outputRoute = 'webrtc'
   await Router.start()
   // النغمة تمر عبر monitorDest — وهو موصول بالـ WebRTC loopback
   const ok = Router.playTestTone(0.1)
@@ -243,6 +261,7 @@ test('أندرويد: تبادل ICE candidates — الاتصال لا يعلق
   installRtcMock(log)
   global.navigator.userAgent = 'Mozilla/5.0 (Linux; Android 14; Pixel 8)'
   const Router = loadRouter()
+  Router.outputRoute = 'webrtc'
   await Router.start()
   // محاكاة وصول candidate من pc1 → يُمرَّر لـ pc2 عبر addIceCandidate
   const pcs = [Router._loopback.pc1, Router._loopback.pc2]
@@ -276,8 +295,8 @@ test('أندرويد: المراقب يبدّل للخام عند صمت الإ�
   await new Promise((r) => setTimeout(r, 1700))
   assert.equal(Router.current.micMode, 'raw', 'بدّل للخام بعد الصمت')
   assert.equal(log.constraints.audio.echoCancellation, false, 'إعادة المحاولة بالخام (بدون معالجة)')
-  // في بيئة الاختبار (لا WebRTC): المخرج يبقى المباشر
-  assert.equal(Router.diagnose().outputPath, 'ctx.destination', 'fallback: مخرج مباشر')
+  // في بيئة الاختبار (لا WebRTC افتراضياً): المخرج عنصر صوتي مباشر
+  assert.equal(Router.diagnose().outputPath, 'audio-element', 'مسار مباشر عبر عنصر صوتي')
   delete global.navigator.userAgent
 })
 
