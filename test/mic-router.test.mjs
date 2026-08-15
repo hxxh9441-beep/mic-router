@@ -191,7 +191,7 @@ test('المحرك: AudioContext بزمن استجابة تفاعلي', async ()
   assert.equal(log.latencyHint, 'interactive')
 })
 
-test('المحرك: السلسلة الكاملة — مصدر ← تنقية ← حساسية ← مكبرات + تسجيل', async () => {
+test('المحرك: السلسلة الكاملة — مصدر ← تنقية ← حساسية ← مراقبة ← سماعات + تسجيل', async () => {
   const { ctx } = makeMocks()
   const Router = loadRouter()
   await Router.start()
@@ -202,16 +202,20 @@ test('المحرك: السلسلة الكاملة — مصدر ← تنقية �
   // مرشح ← حساسية
   assert.equal(Router.hpf.connects.length, 1)
   assert.equal(Router.hpf.connects[0], Router.masterGain)
-  // حساسية ← مكبرات + وجهة تسجيل + فرع الصدى (رطب)
+  // حساسية ← مراقبة المخرج + وجهة تسجيل + فرع الصدى (رطب)
   assert.equal(Router.masterGain.connects.length, 3)
-  assert.ok(Router.masterGain.connects.includes(ctx.destination))
+  assert.ok(Router.masterGain.connects.includes(Router.monitorGain))
   assert.ok(Router.masterGain.connects.includes(Router.recDest))
   assert.ok(Router.masterGain.connects.includes(Router.wetGain))
+  assert.ok(!Router.masterGain.connects.includes(ctx.destination), 'لا اتصال مباشر — يمر عبر المراقبة')
+  // مراقبة المخرج ← السماعات (متصل دائماً)
+  assert.equal(Router.monitorGain.connects.length, 1)
+  assert.equal(Router.monitorGain.connects[0], ctx.destination)
   // نوع المرشح: highpass
   assert.equal(Router.hpf.type, 'highpass')
 })
 
-test('المحرك: فرع الصدى — حساسية ← رطب ← تأخير ← (تغذية راجعة ← تأخير) ← مكبرات + تسجيل', async () => {
+test('المحرك: فرع الصدى — حساسية ← رطب ← تأخير ← (تغذية راجعة ← تأخير) ← مراقبة + تسجيل', async () => {
   const { ctx } = makeMocks()
   const Router = loadRouter()
   await Router.start()
@@ -220,8 +224,9 @@ test('المحرك: فرع الصدى — حساسية ← رطب ← تأخير
   assert.equal(Router.wetGain.connects[0], Router.delay)
   assert.equal(Router.delay.connects.length, 3)
   assert.ok(Router.delay.connects.includes(Router.feedbackGain))
-  assert.ok(Router.delay.connects.includes(ctx.destination))
+  assert.ok(Router.delay.connects.includes(Router.monitorGain))
   assert.ok(Router.delay.connects.includes(Router.recDest))
+  assert.ok(!Router.delay.connects.includes(ctx.destination), 'الرطب يمر عبر المراقبة (يخضع للكتم)')
   assert.equal(Router.feedbackGain.connects.length, 1)
   assert.equal(Router.feedbackGain.connects[0], Router.delay)
 })
@@ -302,6 +307,7 @@ test('المحرك: الإيقاف ينظف — يوقف المسارات ويف
   assert.ok(log.disconnected.includes('recDest'))
   assert.equal(Router.source, null)
   assert.equal(Router.masterGain, null)
+  assert.equal(Router.monitorGain, null, 'مراقبة المخرج تنظف أيضاً')
 })
 
 test('المحرك: إعادة التشغيل بعد الإيقاف تعمل بمصدر جديد', async () => {
@@ -325,17 +331,108 @@ test('المحرك: فشل إذن الميكروفون يرمي خطأ (واجه
   await assert.rejects(() => Router.start(), /Permission denied/)
 })
 
-test('المحرك: السياق المعلّق لا يعلق التشغيل (سباق مع مهلة)', async () => {
-  const { ctx, log } = makeMocks()
+test('المحرك: السياق المعلّق يُستأنف فوراً — قبل طلب الميكروفون', async () => {
+  const { ctx } = makeMocks()
   ctx.state = 'suspended'
-  ctx.resume = () => new Promise(() => {}) // يعلّق للأبد
+  const order = []
+  ctx.resume = async () => {
+    order.push('resume')
+    ctx.state = 'running'
+  }
+  const orig = global.navigator.mediaDevices.getUserMedia
+  global.navigator.mediaDevices.getUserMedia = async (c) => {
+    order.push('mic')
+    return orig(c)
+  }
   const Router = loadRouter()
-  const t0 = Date.now()
-  await Router.start() // يجب أن يكمل خلال ~800ms
-  const elapsed = Date.now() - t0
-  assert.ok(elapsed < 3000, `اكتمل خلال ${elapsed}ms`)
-  assert.ok(Router.source, 'السلسلة بُنيت رغم تعليق resume')
-  assert.ok(log.constraints, 'طلب الميكروفون تم قبل محاولة الاستئناف')
+  await Router.start()
+  assert.equal(order[0], 'resume', 'الاستئناف أولاً ضمن إيماءة المستخدم')
+  assert.equal(order[1], 'mic', 'ثم طلب الميكروفون')
+  assert.equal(Router.ctx.state, 'running')
+  assert.equal(Router.masterGain.gain.value, 1, 'الحساسية 1.0 بعد التشغيل')
+})
+
+test('المحرك: فشل الاستئناف لا يمنع بناء المسار (يحاول مجدداً بعد البناء)', async () => {
+  const { ctx } = makeMocks()
+  ctx.state = 'suspended'
+  let attempts = 0
+  ctx.resume = async () => {
+    attempts++
+    throw new Error('not allowed')
+  }
+  const Router = loadRouter()
+  await Router.start()
+  assert.ok(Router.source, 'المسار بُني رغم رفض الاستئناف')
+  assert.ok(attempts >= 2, `حاول الاستئناف مرتين (فعلياً ${attempts})`)
+  assert.equal(Router.masterGain.gain.value, 1)
+})
+
+test('المحرك: المسار الجاف متصل دائماً بالسماعات حتى لو كل المؤثرات 0%', async () => {
+  const { ctx } = makeMocks()
+  const Router = loadRouter()
+  await Router.start()
+
+  // الافتراضي: كل المؤثرات 0% والحساسية 100%
+  assert.equal(Router.masterGain.gain.value, 1, 'الحساسية الافتراضية 1.0')
+  assert.equal(Router.monitorGain.gain.value, 1, 'المراقبة مفتوحة افتراضياً')
+
+  // السلسلة الجافة: حساسية ← مراقبة ← سماعات (متصل دائماً)
+  assert.ok(Router.masterGain.connects.includes(Router.monitorGain))
+  assert.equal(Router.monitorGain.connects.length, 1)
+  assert.equal(Router.monitorGain.connects[0], ctx.destination)
+
+  // حتى لو خفضنا كل المؤثرات للصفر، المسار للسماعات باقٍ
+  Router.setDelay(0)
+  Router.setFeedback(0)
+  Router.setHpf(0)
+  Router.setGain(100)
+  assert.equal(Router.monitorGain.connects[0], ctx.destination, 'ما زال متصلاً')
+  assert.equal(Router.masterGain.gain.value, 1)
+})
+
+test('المحرك: الحساسية محصّنة ضد NaN والنصوص — لا تنكسر أبداً', async () => {
+  makeMocks()
+  const Router = loadRouter()
+  await Router.start()
+
+  Router.setGain('abc')
+  assert.equal(Router.current.gain, 1, 'نص → 1.0')
+  assert.equal(Router.masterGain.gain.value, 1)
+  Router.setGain(NaN)
+  assert.equal(Router.current.gain, 1, 'NaN → 1.0')
+  Router.setGain(undefined)
+  assert.equal(Router.current.gain, 1, 'undefined → 1.0')
+  Router.setGain(-50)
+  assert.equal(Router.current.gain, 0, 'سالب → 0')
+  Router.setGain(999)
+  assert.equal(Router.current.gain, 2, 'فوق الحد → 2')
+
+  Router.setDelay('xyz')
+  assert.equal(Router.current.delay, 0, 'نص في زمن الصدى → 0')
+  Router.setHpf(NaN)
+  assert.equal(Router.current.hpf, 20, 'NaN في التنقية → 20Hz')
+  Router.setFeedback('٪')
+  assert.equal(Router.current.feedback, 0, 'رمز في قوة الصدى → 0')
+})
+
+test('المحرك: كتم المخرج — سماعات صامتة والتسجيل يستمر', async () => {
+  const { ctx } = makeMocks()
+  const Router = loadRouter()
+  await Router.start()
+
+  Router.setMonitor(true)
+  assert.equal(Router.monitorGain.gain.value, 0, 'المراقبة صفر (صامت)')
+  assert.ok(Router.masterGain.connects.includes(Router.recDest), 'التسجيل متصل دائماً')
+  assert.ok(Router.monitorGain.connects.includes(ctx.destination), 'المسار للسماعات باقٍ (صامت)')
+
+  Router.setMonitor(false)
+  assert.equal(Router.monitorGain.gain.value, 1, 'المراقبة عادت')
+
+  // الكتم يُطبَّق حتى لو فُعّل قبل التشغيل
+  Router.stop()
+  Router.setMonitor(true)
+  await Router.start()
+  assert.equal(Router.monitorGain.gain.value, 0, 'الكتم سابق للتشغيل يُحترم')
 })
 
 test('المحرك: القيم المحفوظة تُطبَّق عند التشغيل (السلايدرات تبقى بعد إعادة التشغيل)', async () => {
